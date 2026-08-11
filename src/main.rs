@@ -119,10 +119,15 @@ fn resolve_fm_home(arg: Option<PathBuf>) -> PathBuf {
     PathBuf::from("agents/firstmate")
 }
 
+/// Fixed-width prefix of an agent row in `--once` output: every column before
+/// TASK plus the separating spaces.
+const ONCE_TASK_PREFIX_WIDTH: usize = 69;
+
 /// Non-interactive text dump of one snapshot (the `--once` path).
 fn print_once(app: &App) {
     use crate::format_util::{format_duration, format_kib, format_percent, format_uptime};
     use crate::procfs::CpuLine;
+    use crate::taskinfo::fit_task_line;
 
     let Some(snap) = app.snapshot() else {
         println!("no snapshot");
@@ -159,11 +164,20 @@ fn print_once(app: &App) {
         "{:<10} {:<14} {:>7} {:>10} {:>9} {:>12}  TASK",
         "RUNTIME", "MODEL", "PID", "ELAPSED", "CPU%", "MEM"
     );
+    // On a real terminal, fit the TASK column to the remaining width (id
+    // dropped first, then ellipsis); when piped, print the full line.
+    let task_width = crossterm::terminal::size()
+        .ok()
+        .map(|(w, _)| (w as usize).saturating_sub(ONCE_TASK_PREFIX_WIDTH).max(1));
     for s in &app.sessions {
         let model = if s.model.is_empty() {
             "-".to_string()
         } else {
             s.model.clone()
+        };
+        let task = match task_width {
+            Some(w) => fit_task_line(&s.task, w),
+            None => s.task.clone(),
         };
         println!(
             "{:<10} {:<14} {:>7} {:>10} {:>9} {:>12}  {}",
@@ -173,7 +187,7 @@ fn print_once(app: &App) {
             format_duration(s.elapsed_secs),
             format_percent(s.cpu_percent),
             format_kib(s.rss_kib),
-            s.task
+            task
         );
     }
 }

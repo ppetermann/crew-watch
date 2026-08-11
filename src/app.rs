@@ -38,15 +38,16 @@ impl App {
         let titles = &self.titles;
         for s in &mut sessions {
             if let Some(entry) = snap.procs.get(&s.pid) {
-                let project = entry
-                    .cwd
-                    .as_deref()
-                    .and_then(crate::project::resolve_project_name);
                 s.task = TaskInfo::resolve(
                     records,
                     titles,
                     entry.cwd.as_deref(),
-                    project.as_deref(),
+                    || {
+                        entry
+                            .cwd
+                            .as_deref()
+                            .and_then(crate::project::resolve_project_name)
+                    },
                     &entry.cmdline,
                     s.kind,
                 );

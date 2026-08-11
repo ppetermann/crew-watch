@@ -26,8 +26,8 @@ use crate::titles::TaskTitles;
 pub struct TaskInfo;
 
 /// Title is capped so the TASK column stays readable even when the backlog
-/// entry is a multi-sentence paragraph. The terminal renders further truncation
-/// to the actual column width.
+/// entry is a multi-sentence paragraph. Width-aware fitting to the actual
+/// column happens at render time via [`fit_task_line`].
 const TITLE_DISPLAY_MAX: usize = 80;
 /// A positional argv token longer than this is treated as a prompt blob (not
 /// shown, and its presence marks the session as non-interactive).
@@ -39,13 +39,14 @@ impl TaskInfo {
     /// Resolve the task line for an agent process. Pure over its inputs so it
     /// can be unit-tested with fixture data.
     ///
-    /// `project_name` is an optional pre-computed project name (the caller may
-    /// resolve it from git); when `None`, the cwd basename is used.
+    /// `project_name` lazily supplies a pre-computed project name (the caller
+    /// may resolve it from git); it is only invoked for sessions that are not
+    /// fleet-matched, and when it yields `None` the cwd basename is used.
     pub fn resolve(
         records: &[TaskRecord],
         titles: &TaskTitles,
         cwd: Option<&Path>,
-        project_name: Option<&str>,
+        project_name: impl FnOnce() -> Option<String>,
         cmdline: &[String],
         kind: &AgentKind,
     ) -> String {
@@ -57,7 +58,7 @@ impl TaskInfo {
         }
 
         // Layer 2: unmatched — prefer the project name over argv.
-        let project = project_name.map(|s| s.to_string()).or_else(|| {
+        let project = project_name().or_else(|| {
             cwd.and_then(|p| p.file_name())
                 .map(|s| s.to_string_lossy().into_owned())
         });
@@ -90,6 +91,32 @@ fn fleet_task_line(rec: &TaskRecord, titles: &TaskTitles) -> String {
     }
 }
 
+/// Fit a task line into `width` display columns. The full `title [task-id]`
+/// line is kept when it fits; when space is tight the bracketed id is dropped
+/// first, and only then is the remaining title ellipsized to the width.
+pub fn fit_task_line(line: &str, width: usize) -> String {
+    if line.chars().count() <= width {
+        return line.to_string();
+    }
+    if let Some(title) = strip_id_suffix(line) {
+        if title.chars().count() <= width {
+            return title.to_string();
+        }
+        return truncate_with_ellipsis(title, width);
+    }
+    truncate_with_ellipsis(line, width)
+}
+
+/// Strip a trailing ` [task-id]` suffix from a task line, returning the title
+/// part. Returns `None` when the line has no such suffix.
+fn strip_id_suffix(line: &str) -> Option<&str> {
+    if !line.ends_with(']') {
+        return None;
+    }
+    let idx = line.rfind(" [")?;
+    Some(line[..idx].trim_end())
+}
+
 /// Truncate a string to `max_chars` Unicode scalar values, appending `...` if
 /// truncation occurred. Truncation always lands on a UTF-8 char boundary.
 pub fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
@@ -105,13 +132,14 @@ pub fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
     out
 }
 
-/// Detect whether argv carries a prompt/task argument (a sign the session is
-/// autonomous rather than interactive). True when:
+/// Detect whether argv marks the session as autonomous rather than
+/// interactive. True when:
 /// - a `--prompt` flag is present (with or without a following value), or
+/// - a headless/print-mode flag (`-p`, `--print`, `--headless`) is present, or
 /// - a positional token (not starting with `-`) is longer than the threshold.
 fn has_prompt_arg(cmdline: &[String]) -> bool {
     for tok in cmdline.iter().skip(1) {
-        if tok == "--prompt" {
+        if tok == "--prompt" || tok == "-p" || tok == "--print" || tok == "--headless" {
             return true;
         }
         if tok.starts_with("--prompt=") {
@@ -199,7 +227,14 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             "--model".to_string(),
             "zai-coding-plan/glm-5.2".to_string(),
         ];
-        let line = TaskInfo::resolve(&recs, &titles, Some(&cwd), None, &cmdline, kind("opencode"));
+        let line = TaskInfo::resolve(
+            &recs,
+            &titles,
+            Some(&cwd),
+            || None,
+            &cmdline,
+            kind("opencode"),
+        );
         assert_eq!(
             line,
             "away mode unusable: resurface fires ~1/sec [fm-afk-resurface-loop]"
@@ -211,7 +246,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
         let recs = vec![parse_meta(SAMPLE_META)];
         let titles = TaskTitles::default();
         let cwd = PathBuf::from("/home/crew/wt/firstmate");
-        let line = TaskInfo::resolve(&recs, &titles, Some(&cwd), None, &[], kind("opencode"));
+        let line = TaskInfo::resolve(&recs, &titles, Some(&cwd), || None, &[], kind("opencode"));
         assert_eq!(line, "fm-afk-resurface-loop");
     }
 
@@ -224,7 +259,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
         );
         let titles = titles_from_backlog(&long_title);
         let cwd = PathBuf::from("/home/crew/wt/firstmate");
-        let line = TaskInfo::resolve(&recs, &titles, Some(&cwd), None, &[], kind("opencode"));
+        let line = TaskInfo::resolve(&recs, &titles, Some(&cwd), || None, &[], kind("opencode"));
         // Title capped to 80 chars (77 + "..."), then id in brackets.
         let title_part = line.split(" [").next().unwrap();
         assert_eq!(title_part.chars().count(), 80);
@@ -246,7 +281,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &[],
             &TaskTitles::default(),
             Some(&cwd),
-            None,
+            || None,
             &cmdline,
             kind("claude"),
         );
@@ -260,7 +295,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &[],
             &TaskTitles::default(),
             Some(&cwd),
-            None,
+            || None,
             &["claude".to_string()],
             kind("claude"),
         );
@@ -276,7 +311,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &[],
             &TaskTitles::default(),
             Some(&cwd),
-            Some("firstmate"),
+            || Some("firstmate".to_string()),
             &["claude".to_string()],
             kind("claude"),
         );
@@ -285,8 +320,9 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
 
     #[test]
     fn unmatched_never_shows_bare_flags() {
-        // The captain's observed complaint: `-p --verbose` alone. After the fix
-        // only the project name is shown.
+        // The captain's observed complaint: `-p --verbose` alone. Only the
+        // project name is shown, and `-p` marks the session headless, so no
+        // "interactive" prefix either.
         let cwd = PathBuf::from("/wt/crew-watch");
         let cmdline = vec![
             "opencode".to_string(),
@@ -297,11 +333,30 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &[],
             &TaskTitles::default(),
             Some(&cwd),
-            None,
+            || None,
             &cmdline,
             kind("opencode"),
         );
-        assert_eq!(line, "interactive @ crew-watch");
+        assert_eq!(line, "crew-watch");
+    }
+
+    #[test]
+    fn unmatched_headless_flags_show_project_only() {
+        // `--print` / `--headless` also mark the session autonomous even when
+        // the prompt itself arrives via stdin.
+        let cwd = PathBuf::from("/wt/crew-watch");
+        for flag in ["--print", "--headless"] {
+            let cmdline = vec!["claude".to_string(), flag.to_string()];
+            let line = TaskInfo::resolve(
+                &[],
+                &TaskTitles::default(),
+                Some(&cwd),
+                || None,
+                &cmdline,
+                kind("claude"),
+            );
+            assert_eq!(line, "crew-watch");
+        }
     }
 
     #[test]
@@ -322,7 +377,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &[],
             &TaskTitles::default(),
             Some(&cwd),
-            None,
+            || None,
             &cmdline,
             kind("opencode"),
         );
@@ -343,7 +398,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &[],
             &TaskTitles::default(),
             Some(&cwd),
-            None,
+            || None,
             &cmdline,
             kind("claude"),
         );
@@ -359,7 +414,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &[],
             &TaskTitles::default(),
             None,
-            None,
+            || None,
             &cmdline,
             kind("claude"),
         );
@@ -381,7 +436,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &[],
             &TaskTitles::default(),
             None,
-            None,
+            || None,
             &cmdline,
             kind("opencode"),
         );
@@ -400,7 +455,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &[],
             &TaskTitles::default(),
             None,
-            None,
+            || None,
             &cmdline,
             kind("claude"),
         );
@@ -409,8 +464,43 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
 
     #[test]
     fn no_cwd_empty_cmdline_uses_kind() {
-        let line = TaskInfo::resolve(&[], &TaskTitles::default(), None, None, &[], kind("claude"));
+        let line =
+            TaskInfo::resolve(&[], &TaskTitles::default(), None, || None, &[], kind("claude"));
         assert_eq!(line, "claude");
+    }
+
+    // --- fit_task_line ---
+
+    #[test]
+    fn fit_full_line_kept_when_it_fits() {
+        let line = "fix flood [fm-afk-resurface-loop]";
+        assert_eq!(fit_task_line(line, 40), line);
+        assert_eq!(fit_task_line(line, line.chars().count()), line);
+    }
+
+    #[test]
+    fn fit_drops_id_first_when_tight() {
+        let line = "fix away-mode resurface flood [fm-afk-resurface-loop]";
+        assert_eq!(fit_task_line(line, 30), "fix away-mode resurface flood");
+    }
+
+    #[test]
+    fn fit_ellipsizes_title_when_even_title_is_too_wide() {
+        let line = "fix away-mode resurface flood [fm-afk-resurface-loop]";
+        assert_eq!(fit_task_line(line, 10), "fix awa...");
+    }
+
+    #[test]
+    fn fit_line_without_id_suffix_gets_ellipsis() {
+        assert_eq!(fit_task_line("interactive @ firstmate", 12), "interacti...");
+    }
+
+    #[test]
+    fn fit_multibyte_title_is_char_boundary_safe() {
+        let line = format!("{} [task-x]", "ä".repeat(30));
+        let fitted = fit_task_line(&line, 10);
+        assert_eq!(fitted.chars().count(), 10);
+        assert!(fitted.ends_with("..."));
     }
 
     // --- truncate_with_ellipsis ---
