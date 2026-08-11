@@ -6,7 +6,8 @@
 //!    column reads like a sentence: `fix away-mode resurface flood
 //!    [fm-afk-resurface-loop]`. The title is shown first, the task id in
 //!    brackets as a secondary reference.
-//! 2. **Unmatched with a cwd**: the cwd basename as the project name, labelled
+//! 2. **Unmatched with a cwd**: the project name (git repo name via
+//!    [`crate::project`], else the cwd basename), labelled
 //!    `interactive @ <project>` when no prompt arg is detected (an interactive
 //!    session the captain is driving). Bare flag noise like `-p --verbose` is
 //!    never shown alone.
@@ -464,8 +465,14 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
 
     #[test]
     fn no_cwd_empty_cmdline_uses_kind() {
-        let line =
-            TaskInfo::resolve(&[], &TaskTitles::default(), None, || None, &[], kind("claude"));
+        let line = TaskInfo::resolve(
+            &[],
+            &TaskTitles::default(),
+            None,
+            || None,
+            &[],
+            kind("claude"),
+        );
         assert_eq!(line, "claude");
     }
 
