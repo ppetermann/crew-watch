@@ -30,7 +30,12 @@ use crate::meta::load_fm_home;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    let interval = Duration::from_secs_f64(cli.interval.clamp(0.1, 3600.0));
+    let interval_secs = if cli.interval.is_finite() {
+        cli.interval.clamp(0.1, 3600.0)
+    } else {
+        2.0
+    };
+    let interval = Duration::from_secs_f64(interval_secs);
     let fm_home = resolve_fm_home(cli.fm_home);
     let records = load_fm_home(&fm_home);
     let mut app = App::new(interval, records);

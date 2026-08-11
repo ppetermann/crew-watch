@@ -9,7 +9,13 @@ what do they cost?* `crew-watch` replaces that bottom half with one row per
 agent session, with CPU% and memory aggregated over the agent's entire subtree
 (the agent's real cost is mostly its child compilers, tests, and tools).
 
-![layout: top = per-core bars + mem/swap + tasks/load/uptime; bottom = agents table]
+```text
+┌─ system overview ───────────────────────────────────────────┐
+│ per-core usage bars · mem/swap bars · tasks / load / uptime │
+├─ agents ────────────────────────────────────────────────────┤
+│ RUNTIME   PID   ELAPSED   CPU%   MEM   TASK                 │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Status
 

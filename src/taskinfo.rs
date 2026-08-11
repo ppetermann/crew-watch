@@ -5,8 +5,8 @@
 //! 1. firstmate fleet records ([`crate::meta`]), matched by the agent's cwd;
 //! 2. a process-derived fallback: cwd basename plus a trimmed argv excerpt.
 //!
-//! The layering mirrors the detection table: a new fleet format is a new
-//! `TaskInfoSource` implementation prepended here.
+//! The layering mirrors the detection table: to support a new fleet format,
+//! prepend another lookup step at the top of [`TaskInfo::resolve`].
 
 use std::path::Path;
 
@@ -77,7 +77,11 @@ fn argv_excerpt(cmdline: &[String]) -> Option<String> {
         }
     }
     if out.len() > ARGV_EXCERPT_MAX_CHARS {
-        out.truncate(ARGV_EXCERPT_MAX_CHARS - 3);
+        let mut cut = ARGV_EXCERPT_MAX_CHARS - 3;
+        while !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
         out.push_str("...");
     }
     if out.is_empty() {
@@ -146,6 +150,15 @@ project=/home/crew/agents/firstmate/projects/crew-watch\nharness=opencode\n";
     fn fallback_no_cwd_uses_kind() {
         let line = TaskInfo::resolve(&[], None, &[], kind("claude"));
         assert_eq!(line, "claude");
+    }
+
+    #[test]
+    fn fallback_truncates_multibyte_on_char_boundary() {
+        let cwd = PathBuf::from("/wt/x");
+        let arg = "ä".repeat(25);
+        let cmdline = vec!["opencode".to_string(), arg];
+        let line = TaskInfo::resolve(&[], Some(&cwd), &cmdline, kind("opencode"));
+        assert_eq!(line, format!("x: {}...", "ä".repeat(18)));
     }
 
     #[test]
