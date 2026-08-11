@@ -13,7 +13,7 @@ agent session, with CPU% and memory aggregated over the agent's entire subtree
 ┌─ system overview ───────────────────────────────────────────┐
 │ per-core usage bars · mem/swap bars · tasks / load / uptime │
 ├─ agents ────────────────────────────────────────────────────┤
-│ RUNTIME   PID   ELAPSED   CPU%   MEM   TASK                 │
+│ RUNTIME   MODEL   PID   ELAPSED   CPU%   MEM   TASK         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -61,9 +61,10 @@ to verify detection or to script a fleet check without a terminal:
 ```
 $ crew-watch --once
 cores=20 mem=4.4GiB/30.6GiB swap=0KiB/128.0GiB tasks=630 load=4.03 3.77 3.11 up=2:11:33
-RUNTIME        PID    ELAPSED      CPU%          MEM  TASK
-opencode     28404      36:34     97.0%     927.2MiB  crew-watch-v1 (crew-watch)
-claude       14405      41:27     18.0%     516.1MiB  fm-daemon-exit-on-return (firstmate)
+RUNTIME    MODEL            PID    ELAPSED      CPU%          MEM  TASK
+opencode   glm-5.2       28404      36:34     97.0%     927.2MiB  crew-watch: add MODEL column ... [crew-watch-model-task-cols]
+claude     opus          14405      41:27     18.0%     516.1MiB  away mode unusable: resurface fires ... [fm-afk-resurface-loop]
+claude     -              5463     2:50:31      0.0%     560.0MiB  interactive @ firstmate
 ...
 ```
 
@@ -79,6 +80,10 @@ claude       14405      41:27     18.0%     516.1MiB  fm-daemon-exit-on-return (
 **Bottom — agent list, one row per running agent session:**
 
 - `RUNTIME` — which agent runtime it is (`claude`, `opencode`, ...).
+- `MODEL` — the model the agent is running, parsed from its `--model` argv flag
+  with the provider prefix stripped for compactness
+  (`zai-coding-plan/glm-5.2` → `glm-5.2`). Shows `-` when no model flag is
+  present (e.g. an interactive session).
 - `PID` / `ELAPSED` — the session's root agent process.
 - `CPU%` and `MEM` — aggregated over the agent's whole process subtree. CPU% is
   normalized so one core = 100% (a multi-core subtree can exceed 100%, matching
@@ -126,19 +131,30 @@ so:
 ## Task info sources ("what is it working on")
 
 The `TASK` column is resolved by layered sources, in order; the first to answer
-wins. The layering mirrors the detection table so other fleet formats can be
-added later.
+wins.
 
-1. **Firstmate fleet records**, when present. If the firstmate home (env
-   `CREW_WATCH_FM_HOME`, or default `~/agents/firstmate`) contains
+1. **Firstmate fleet records + backlog title**, when present. If the firstmate
+   home (env `CREW_WATCH_FM_HOME`, or default `~/agents/firstmate`) contains
    `state/*.meta` files, each records `worktree=`, `project=`,
    `endpoint_task_id=`, etc. `crew-watch` matches an agent process to a record
-   via its cwd (the worktree path) and shows the task id and project, e.g.
-   `crew-watch-v1 (crew-watch)`. This is read-only and best-effort: a
-   missing/unparseable home or record never fails.
-2. **Fallback**: the process's cwd basename plus a trimmed argv excerpt.
+   via its cwd (the worktree path). When the task id resolves to a human title
+   from `data/backlog.md` (or, as a fallback, the first sentence of
+   `data/<task-id>/brief.md`), the column shows that title with the task id in
+   brackets, e.g. `away mode unusable: resurface fires ... [fm-afk-resurface-loop]`.
+   If no title is found, the task id is shown on its own. This is read-only and
+   best-effort: a missing/unparseable home, record, backlog, or brief never
+   fails.
+2. **Unmatched agent, has a cwd**: the project name as a human-readable label.
+   The project name is the git repo name when the cwd is inside a git repo
+   (handles worktrees and bare-repo worktrees like no-mistakes), else the cwd
+   basename. An interactive session shows `interactive @ <project>`; an
+   autonomous session whose task could not be identified shows just
+   `<project>`. Bare flag noise (`-p --verbose`) is never shown.
+3. **No cwd**: a trimmed positional argv excerpt, else the runtime name.
 
-If neither yields anything, the runtime name is shown.
+The MODEL column is parsed independently from the agent's `--model` argv flag
+(both `--model X` and `--model=X`), with any provider prefix
+(`org/model-family` → `model-family`) stripped. No flag → `-`.
 
 ## Design notes & constraints
 
@@ -165,8 +181,9 @@ CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`,
 request.
 
 The pure logic — `/proc` parsing, agent detection, subtree aggregation, meta
-parsing, and task resolution — is unit-tested with fixture data. The TUI
-rendering itself is not unit-tested in v1.
+parsing, model extraction, title lookup, project-name resolution, and task
+resolution — is unit-tested with fixture data. The TUI rendering itself is not
+unit-tested in v1.
 
 ## License
 

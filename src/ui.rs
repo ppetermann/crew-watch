@@ -14,10 +14,14 @@ use crate::app::App;
 use crate::detect::{AgentKind, AGENT_KINDS};
 use crate::format_util::{format_duration, format_kib, format_percent, format_uptime};
 use crate::procfs::{CpuLine, Snapshot};
+use crate::taskinfo::fit_task_line;
 
 const MIN_CELL_WIDTH: usize = 18;
 const MAX_COLS: usize = 8;
 const MEM_BAR_WIDTH: usize = 20;
+/// Fixed widths of every agent-table column before the flexible TASK column.
+const AGENT_FIXED_COL_WIDTHS: [u16; 6] = [10, 14, 8, 10, 9, 12];
+const AGENT_COL_SPACING: u16 = 1;
 
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
@@ -257,6 +261,7 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
 
     let header = Row::new(vec![
         Cell::from("RUNTIME"),
+        Cell::from("MODEL"),
         Cell::from("PID"),
         Cell::from("ELAPSED"),
         Cell::from("CPU%"),
@@ -265,31 +270,38 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
     ])
     .style(Style::default().add_modifier(Modifier::BOLD));
 
+    // Width the TASK column actually gets: total minus borders, the fixed
+    // columns, and the spacing between all seven columns.
+    let fixed: u16 = AGENT_FIXED_COL_WIDTHS.iter().sum();
+    let spacing = AGENT_COL_SPACING * AGENT_FIXED_COL_WIDTHS.len() as u16;
+    let task_width = area.width.saturating_sub(2 + fixed + spacing).max(1) as usize;
+
     let rows = app.sessions.iter().map(|s| {
         Row::new(vec![
             Cell::from(s.kind.display.to_string()).style(Style::default().fg(kind_color(s.kind))),
+            Cell::from(if s.model.is_empty() {
+                "-".to_string()
+            } else {
+                s.model.clone()
+            }),
             Cell::from(s.pid.to_string()),
             Cell::from(format_duration(s.elapsed_secs)),
             Cell::from(format_percent(s.cpu_percent))
                 .style(Style::default().fg(pct_color(s.cpu_percent))),
             Cell::from(format_kib(s.rss_kib)),
-            Cell::from(s.task.clone()),
+            Cell::from(fit_task_line(&s.task, task_width)),
         ])
     });
 
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(10),
-            Constraint::Length(8),
-            Constraint::Length(10),
-            Constraint::Length(9),
-            Constraint::Length(12),
-            Constraint::Min(1),
-        ],
-    )
-    .header(header)
-    .block(block);
+    let mut constraints: Vec<Constraint> = AGENT_FIXED_COL_WIDTHS
+        .iter()
+        .map(|w| Constraint::Length(*w))
+        .collect();
+    constraints.push(Constraint::Min(1));
+    let table = Table::new(rows, constraints)
+        .column_spacing(AGENT_COL_SPACING)
+        .header(header)
+        .block(block);
     f.render_widget(table, area);
 }
 
