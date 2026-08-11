@@ -128,6 +128,7 @@ fn print_once(app: &App) {
     use crate::format_util::{format_duration, format_kib, format_percent, format_uptime};
     use crate::procfs::CpuLine;
     use crate::taskinfo::fit_task_line;
+    use std::io::IsTerminal;
 
     let Some(snap) = app.snapshot() else {
         println!("no snapshot");
@@ -165,10 +166,17 @@ fn print_once(app: &App) {
         "RUNTIME", "MODEL", "PID", "ELAPSED", "CPU%", "MEM"
     );
     // On a real terminal, fit the TASK column to the remaining width (id
-    // dropped first, then ellipsis); when piped, print the full line.
-    let task_width = crossterm::terminal::size()
-        .ok()
-        .map(|(w, _)| (w as usize).saturating_sub(ONCE_TASK_PREFIX_WIDTH).max(1));
+    // dropped first, then ellipsis); when piped/redirected, print the full
+    // line so scripts always see the task id. crossterm's size() consults
+    // /dev/tty and would succeed even with stdout redirected, hence the
+    // explicit is_terminal gate.
+    let task_width = if io::stdout().is_terminal() {
+        crossterm::terminal::size()
+            .ok()
+            .map(|(w, _)| (w as usize).saturating_sub(ONCE_TASK_PREFIX_WIDTH).max(1))
+    } else {
+        None
+    };
     for s in &app.sessions {
         let model = if s.model.is_empty() {
             "-".to_string()
@@ -180,7 +188,7 @@ fn print_once(app: &App) {
             None => s.task.clone(),
         };
         println!(
-            "{:<10} {:<14} {:>7} {:>10} {:>9} {:>12}  {}",
+            "{:<10} {:<14.14} {:>7} {:>10} {:>9} {:>12}  {}",
             s.kind.display,
             model,
             s.pid,
