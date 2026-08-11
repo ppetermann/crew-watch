@@ -146,6 +146,9 @@ pub struct Session {
     /// Resolved one-line "what is it working on" text (filled by the caller
     /// via [`crate::taskinfo`]).
     pub task: String,
+    /// Compact display model parsed from argv (e.g. `glm-5.2`), or empty when
+    /// no model flag was present (filled by the caller; rendered as `-`).
+    pub model: String,
 }
 
 /// Walk strict parents of `pid` until reaching a detected agent, or run out.
@@ -265,6 +268,7 @@ pub fn build_sessions(curr: &Snapshot, prev: Option<&Snapshot>) -> Vec<Session> 
             rss_kib: rss.get(&pid).copied().unwrap_or(0),
             elapsed_secs,
             task: String::new(),
+            model: String::new(),
         });
     }
 

@@ -257,6 +257,7 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
 
     let header = Row::new(vec![
         Cell::from("RUNTIME"),
+        Cell::from("MODEL"),
         Cell::from("PID"),
         Cell::from("ELAPSED"),
         Cell::from("CPU%"),
@@ -268,6 +269,11 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
     let rows = app.sessions.iter().map(|s| {
         Row::new(vec![
             Cell::from(s.kind.display.to_string()).style(Style::default().fg(kind_color(s.kind))),
+            Cell::from(if s.model.is_empty() {
+                "-".to_string()
+            } else {
+                s.model.clone()
+            }),
             Cell::from(s.pid.to_string()),
             Cell::from(format_duration(s.elapsed_secs)),
             Cell::from(format_percent(s.cpu_percent))
@@ -281,6 +287,7 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
         rows,
         [
             Constraint::Length(10),
+            Constraint::Length(14),
             Constraint::Length(8),
             Constraint::Length(10),
             Constraint::Length(9),

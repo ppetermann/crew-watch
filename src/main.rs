@@ -6,8 +6,11 @@ mod cli;
 mod detect;
 mod format_util;
 mod meta;
+mod model;
 mod procfs;
+mod project;
 mod taskinfo;
+mod titles;
 mod ui;
 
 use std::io;
@@ -27,6 +30,7 @@ use ratatui::Terminal;
 use crate::app::App;
 use crate::cli::Cli;
 use crate::meta::load_fm_home;
+use crate::titles::load_task_titles;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -38,7 +42,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let interval = Duration::from_secs_f64(interval_secs);
     let fm_home = resolve_fm_home(cli.fm_home);
     let records = load_fm_home(&fm_home);
-    let mut app = App::new(interval, records);
+    let titles = load_task_titles(&fm_home);
+    let mut app = App::new(interval, records, titles);
 
     if cli.once {
         // Two samples ~1s apart so CPU% deltas are real (not all zero).
@@ -151,13 +156,19 @@ fn print_once(app: &App) {
         return;
     }
     println!(
-        "{:<10} {:>7} {:>10} {:>9} {:>12}  TASK",
-        "RUNTIME", "PID", "ELAPSED", "CPU%", "MEM"
+        "{:<10} {:<14} {:>7} {:>10} {:>9} {:>12}  TASK",
+        "RUNTIME", "MODEL", "PID", "ELAPSED", "CPU%", "MEM"
     );
     for s in &app.sessions {
+        let model = if s.model.is_empty() {
+            "-".to_string()
+        } else {
+            s.model.clone()
+        };
         println!(
-            "{:<10} {:>7} {:>10} {:>9} {:>12}  {}",
+            "{:<10} {:<14} {:>7} {:>10} {:>9} {:>12}  {}",
             s.kind.display,
+            model,
             s.pid,
             format_duration(s.elapsed_secs),
             format_percent(s.cpu_percent),

@@ -28,7 +28,7 @@ the full user-facing spec (install, usage, detection table, firstmate records).
 
 - `src/procfs.rs` — pure parsers (`parse_proc_pid_stat`, `parse_proc_stat`, `parse_meminfo`, `parse_loadavg`, `parse_uptime`, `parse_cmdline`) + `collect()` which reads `/proc` exactly once per tick.
 - `src/detect.rs` — `AGENT_KINDS` detection table, `extract_candidates`, `build_sessions` (subtree aggregation; nearest-enclosing-agent attribution so nested agents are separate rows excluded from ancestors).
-- `src/meta.rs` + `src/taskinfo.rs` — firstmate `state/*.meta` parsing and layered `TASK` resolution.
+- `src/meta.rs` — firstmate `state/*.meta` parsing. `src/titles.rs` — backlog.md + brief.md title lookup. `src/taskinfo.rs` — layered `TASK` resolution (fleet title → cwd project → argv). `src/model.rs` — `--model` argv extraction. `src/project.rs` — git-repo project-name resolution from cwd (handles worktrees).
 - `src/ui.rs` — ratatui rendering. `src/format_util.rs` — human-readable formatting. `src/app.rs` — tick state. `src/cli.rs` — clap CLI. `src/main.rs` — entry point + event loop.
 
 ### Sharp edge: building on a host without gcc
