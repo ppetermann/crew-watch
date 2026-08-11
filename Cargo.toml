@@ -1,0 +1,20 @@
+[package]
+name = "crew-watch"
+version = "0.1.0"
+edition = "2021"
+description = "TUI fleet monitor: htop-style system overview plus a per-agent view of running AI agent runtimes and their process-subtree cost."
+license = "MIT"
+repository = "https://github.com/ppetermann/crew-watch"
+
+[[bin]]
+name = "crew-watch"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+clap = { version = "4.5", features = ["derive", "env"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
