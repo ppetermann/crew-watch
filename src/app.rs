@@ -41,13 +41,9 @@ impl App {
 
     /// Collect one /proc snapshot, rebuild sessions, and resolve task info.
     pub fn tick(&mut self) {
-        // Re-read fleet records and titles BEFORE resolving, so a task spawned
-        // after launch — or a worker copy recycled from a finished task to a
-        // new one in the same reused worktree — is labelled with its current
-        // title, not whatever occupied that path when crew-watch started. Both
-        // loaders are best-effort and never fail, so a fleet home that vanishes
-        // mid-run yields empty records (agents then fall through to the
-        // project / argv layers) instead of crashing or keeping ghost labels.
+        // Reload BEFORE resolving: this tick's labels must come from this
+        // tick's records, not from whatever occupied a (recycled) worktree at
+        // launch. See the `src/taskinfo.rs` header for why that matters.
         self.reload_fleet();
 
         let snap = collect();
