@@ -196,10 +196,10 @@ deterministic width ladder on narrow terminals:
   per window. A selected provider always gets its line, showing a dim status
   phrase (`sign-in required`, `unavailable`) when it has no usage windows.
   Freshness never hides anything: a provider serving cached data is dimmed and
-  suffixed `stale`, not dropped. On the first run with no saved selection the
-  selection is *seeded* from the providers currently reporting usage windows
-  ("auto") — a seed, not an ongoing filter, so your later choices win.
-  Explicitly clearing the list hides the row.
+  suffixed `stale`, not dropped. With no saved selection ("auto" mode) the row
+  shows whichever providers currently report usage windows, re-evaluated every
+  refresh; the dialog seeds its checkboxes from that same set. Saving replaces
+  auto with your explicit list — including an empty one, which hides the row.
 - **Persistence.** The selection is stored at
   `${XDG_CONFIG_HOME:-~/.config}/crew-watch/config` as
   `quota_providers=claude,codex`. The file format is `key=value` (no TOML dep);
