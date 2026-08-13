@@ -9,7 +9,7 @@
 
 use crossterm::event::KeyCode;
 
-use crate::quota::{provider_is_live, QuotaReport};
+use crate::quota::{has_usage_windows, QuotaReport};
 use crate::quota_row::dialog_note;
 
 /// One selectable row.
@@ -45,10 +45,10 @@ pub enum Outcome {
 }
 
 /// Build the dialog. `stored` is the persisted selection (`None` ⇒ auto mode).
-/// In auto mode the live providers are pre-checked, so Enter with no changes
-/// just makes the current view explicit. The `auto_ids` parameter is the set of
-/// ids auto mode would show (live provider ids); passing it explicitly keeps
-/// this function pure over its arguments.
+/// In auto mode the providers reporting windows are pre-checked, so Enter with
+/// no changes just makes the current view explicit. The `auto_ids` parameter is
+/// that seed set; passing it explicitly keeps this function pure over its
+/// arguments.
 pub fn open(
     report: Option<&QuotaReport>,
     stored: Option<&[String]>,
@@ -132,15 +132,15 @@ impl QuotaDialog {
     }
 }
 
-/// The ids auto mode would show right now (providers with ≥1 window), in report
-/// order. Exposed so `main.rs` can pre-check the dialog and so the auto row and
-/// the dialog share one definition of "auto".
+/// The ids auto mode seeds the selection from (providers with ≥1 window), in
+/// report order. Exposed so `main.rs` can pre-check the dialog and so the auto
+/// row and the dialog share one definition of "auto".
 pub fn auto_ids(report: Option<&QuotaReport>) -> Vec<String> {
     report
         .map(|r| {
             r.providers
                 .iter()
-                .filter(|p| provider_is_live(p))
+                .filter(|p| has_usage_windows(p))
                 .map(|p| p.id.clone())
                 .collect()
         })
@@ -309,12 +309,28 @@ mod tests {
     }
 
     #[test]
-    fn auto_ids_live_only() {
+    fn auto_ids_providers_with_windows_only() {
         let r = report(vec![
             live("claude", None),
             dead("codex", ProviderStatus::Error),
         ]);
         assert_eq!(auto_ids(Some(&r)), vec!["claude".to_string()]);
         assert!(auto_ids(None).is_empty());
+    }
+
+    #[test]
+    fn auto_ids_seed_ignores_status() {
+        // A provider serving cached windows (stale) or an unrecognised status is
+        // still seeded — freshness never governs visibility.
+        let mut stale_claude = live("claude", None);
+        stale_claude.stale = true;
+        stale_claude.status = ProviderStatus::Unknown("stale".to_string());
+        let mut zai = live("zai", None);
+        zai.status = ProviderStatus::Unknown("missing".to_string());
+        let r = report(vec![stale_claude, zai]);
+        assert_eq!(
+            auto_ids(Some(&r)),
+            vec!["claude".to_string(), "zai".to_string()]
+        );
     }
 }

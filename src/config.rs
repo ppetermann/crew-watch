@@ -24,12 +24,29 @@ pub struct Config {
 }
 
 /// Resolve the config file path, or `None` if neither `XDG_CONFIG_HOME` nor
-/// `$HOME` is set.
+/// `$HOME` is usably set.
 pub fn config_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    let base = config_base(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )?;
     Some(base.join("crew-watch").join("config"))
+}
+
+/// The base config directory for the given environment values (pure, so the
+/// XDG rules are testable without mutating process-global env).
+///
+/// Per the XDG basedir spec an empty value is handled exactly as if it were
+/// unset — otherwise `XDG_CONFIG_HOME=""` yields the *relative* path
+/// `crew-watch/config`, and the dialog's save would create a stray config
+/// directory in whatever directory crew-watch happened to be launched from.
+fn config_base(
+    xdg: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let non_empty = |v: std::ffi::OsString| (!v.is_empty()).then(|| PathBuf::from(v));
+    xdg.and_then(non_empty)
+        .or_else(|| home.and_then(non_empty).map(|h| h.join(".config")))
 }
 
 /// Parse a config file. Missing/unreadable ⇒ defaults; never errors.
@@ -110,6 +127,24 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn config_base_prefers_xdg_and_treats_empty_as_unset() {
+        let os = |s: &str| std::ffi::OsString::from(s);
+        assert_eq!(
+            config_base(Some(os("/xdg")), Some(os("/home/u"))),
+            Some(PathBuf::from("/xdg"))
+        );
+        // Empty XDG_CONFIG_HOME ⇒ unset, so $HOME/.config wins (never a relative
+        // path rooted in the launch directory).
+        let base = config_base(Some(os("")), Some(os("/home/u")));
+        assert_eq!(base, Some(PathBuf::from("/home/u/.config")));
+        // Both empty/absent ⇒ no path at all (persistence disabled).
+        assert_eq!(config_base(Some(os("")), Some(os(""))), None);
+        assert_eq!(config_base(None, None), None);
+        // Whatever we resolve is absolute given absolute inputs.
+        assert!(base.unwrap().is_absolute());
     }
 
     #[test]

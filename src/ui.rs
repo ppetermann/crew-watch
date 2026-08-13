@@ -18,7 +18,7 @@ use crate::format_util::{
     format_age_compact, format_duration, format_kib, format_percent, format_uptime, make_bar,
 };
 use crate::procfs::{CpuLine, Snapshot};
-use crate::quota::{provider_is_live, ProviderQuota};
+use crate::quota::{has_usage_windows, ProviderQuota};
 use crate::quota_row::build_provider_line;
 use crate::taskinfo::fit_task_line;
 
@@ -367,12 +367,11 @@ fn draw_quota(f: &mut Frame, area: Rect, app: &App) {
     let age_suffix = row_age.map(|d| format!(" ({} old)", format_age_compact(d.as_secs())));
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut first = true;
 
     let push_provider = |p: &ProviderQuota, lines: &mut Vec<Line<'static>>| {
         let dim = row_age.is_some() || p.stale;
         let segs = build_provider_line(p, now, area.width as usize);
-        let live = !p.windows.is_empty();
+        let live = has_usage_windows(p);
         let spans: Vec<Span<'static>> = segs
             .iter()
             .enumerate()
@@ -399,9 +398,8 @@ fn draw_quota(f: &mut Frame, area: Rect, app: &App) {
     match app.effective_selection() {
         QuotaSelection::Auto => {
             if let Some(r) = &app.quota.report {
-                for p in r.providers.iter().filter(|p| provider_is_live(p)) {
+                for p in r.providers.iter().filter(|p| has_usage_windows(p)) {
                     push_provider(p, &mut lines);
-                    first = false;
                 }
             }
         }
@@ -411,7 +409,6 @@ fn draw_quota(f: &mut Frame, area: Rect, app: &App) {
                     Some(r) => {
                         for p in r.providers.iter().filter(|p| ids.contains(&p.id)) {
                             push_provider(p, &mut lines);
-                            first = false;
                         }
                     }
                     None => {
@@ -421,7 +418,6 @@ fn draw_quota(f: &mut Frame, area: Rect, app: &App) {
                             format!(" quota: unavailable ({err})"),
                             Style::default().fg(Color::DarkGray),
                         )));
-                        first = false;
                     }
                 }
             }
@@ -437,7 +433,6 @@ fn draw_quota(f: &mut Frame, area: Rect, app: &App) {
             ));
         }
     }
-    let _ = first;
 
     if !lines.is_empty() {
         f.render_widget(Paragraph::new(lines), area);

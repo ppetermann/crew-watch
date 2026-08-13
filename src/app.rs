@@ -8,7 +8,7 @@ use crate::detect::{build_sessions, Session};
 use crate::meta::{load_fm_home, TaskRecord};
 use crate::model::resolve_model;
 use crate::procfs::{collect, Snapshot};
-use crate::quota::{provider_is_live, QuotaFetch, QuotaReport};
+use crate::quota::{has_usage_windows, QuotaFetch, QuotaReport};
 use crate::taskinfo::TaskInfo;
 use crate::titles::{load_task_titles, TaskTitles};
 
@@ -161,9 +161,9 @@ impl App {
     }
 
     /// Number of quota lines to render this frame (the height of the quota slot).
-    /// 0 when disabled, auto with no live providers, or explicit-empty selection
-    /// — in all those cases the slot vanishes and the layout is byte-identical to
-    /// pre-quota crew-watch.
+    /// 0 when disabled, auto with no provider reporting windows, or an
+    /// explicit-empty selection — in all those cases the slot vanishes and the
+    /// layout is byte-identical to pre-quota crew-watch.
     pub fn quota_lines_count(&self) -> usize {
         if !self.quota_enabled {
             return 0;
@@ -182,7 +182,7 @@ impl App {
                 .quota
                 .report
                 .as_ref()
-                .map(|r| r.providers.iter().filter(|p| provider_is_live(p)).count())
+                .map(|r| r.providers.iter().filter(|p| has_usage_windows(p)).count())
                 .unwrap_or(0),
         }
     }
@@ -441,9 +441,21 @@ mod tests {
         assert_eq!(app.quota_lines_count(), 0);
         app.quota.report = Some(quota_report_with(true));
         assert_eq!(app.quota_lines_count(), 1, "live claude -> 1 line");
-        // provider goes non-live: auto hides it
+        // provider loses its windows: auto has nothing to render
         app.quota.report = Some(quota_report_with(false));
         assert_eq!(app.quota_lines_count(), 0);
+    }
+
+    #[test]
+    fn quota_lines_auto_counts_stale_and_unknown_status() {
+        // Staleness (cache fallback) and an unrecognised status must not blank the
+        // row: as long as a provider reports windows, auto mode gives it a line.
+        let mut app = App::new(Duration::from_secs(2), PathBuf::from("/nonexistent"));
+        let mut report = quota_report_with(true);
+        report.providers[0].stale = true;
+        report.providers[0].status = ProviderStatus::Unknown("stale".to_string());
+        app.quota.report = Some(report);
+        assert_eq!(app.quota_lines_count(), 1);
     }
 
     #[test]

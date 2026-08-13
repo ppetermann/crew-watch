@@ -73,14 +73,6 @@ pub enum ProviderStatus {
     Unknown(String),
 }
 
-impl ProviderStatus {
-    /// True when the provider is carrying usable quota windows (the row renders
-    /// bars for these). Today every non-`fresh` provider reports `windows: []`.
-    fn is_live(&self) -> bool {
-        matches!(self, ProviderStatus::Fresh)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Private serde structs (camelCase, lenient; unknown fields ignored)
 // ---------------------------------------------------------------------------
@@ -191,10 +183,17 @@ pub fn parse_report(input: &str) -> Result<QuotaReport, String> {
     })
 }
 
-/// True iff this provider carries at least one usable window. Public so the
-/// auto-selection rule (D7) and the row can share one definition of "live".
-pub fn provider_is_live(p: &ProviderQuota) -> bool {
-    p.status.is_live() && !p.windows.is_empty()
+/// True iff this provider carries at least one usage window to render bars for.
+/// The single definition shared by the auto-selection seed (D7), the row, its
+/// colouring, and `--once`, so they can never disagree.
+///
+/// Deliberately independent of [`ProviderStatus`]: quota-axi reports
+/// `state.status = stale` whenever a live fetch failed and it served its cache,
+/// which can happen at any moment. Freshness is a *display* signal (dim styling
+/// / a `stale` suffix), never a visibility filter — hiding on it would blank the
+/// row exactly when the last known reading matters most.
+pub fn has_usage_windows(p: &ProviderQuota) -> bool {
+    !p.windows.is_empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -339,25 +338,26 @@ pub fn fetch_once(timeout: Duration) -> QuotaFetch {
     let deadline = std::time::Instant::now() + timeout;
     let exit_status = loop {
         match cmd.try_wait() {
-            Ok(Some(status)) => break Some(status),
+            Ok(Some(status)) => break Ok(status),
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
                     let _ = cmd.kill();
                     let _ = cmd.wait();
-                    break None;
+                    break Err("timed out".to_string());
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(_) => {
+            Err(e) => {
                 let _ = cmd.kill();
                 let _ = cmd.wait();
-                break None;
+                break Err(format!("quota-axi wait failed: {e}"));
             }
         }
     };
 
-    let Some(status) = exit_status else {
-        return QuotaFetch::Failed("timed out".to_string());
+    let status = match exit_status {
+        Ok(s) => s,
+        Err(msg) => return QuotaFetch::Failed(msg),
     };
     if !status.success() {
         let stderr = cmd
@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(claude.plan.as_deref(), Some("max"));
         assert_eq!(claude.status, ProviderStatus::Fresh);
         assert!(!claude.stale);
-        assert!(provider_is_live(claude));
+        assert!(has_usage_windows(claude));
         assert_eq!(claude.windows.len(), 3);
         assert_eq!(claude.windows[0].id, "five_hour");
         assert_eq!(claude.windows[0].label, "session");
@@ -474,15 +474,44 @@ mod tests {
             by("codex").error.as_deref(),
             Some("Codex quota unavailable")
         );
-        assert!(!provider_is_live(by("codex")));
+        assert!(!has_usage_windows(by("codex")));
         assert_eq!(by("copilot").status, ProviderStatus::AuthRequired);
-        assert!(!provider_is_live(by("copilot")));
-        // every non-live provider has empty windows
-        for p in &r.providers {
-            if !provider_is_live(p) {
-                assert!(p.windows.is_empty(), "{} should have no windows", p.id);
-            }
-        }
+        assert!(!has_usage_windows(by("copilot")));
+        // claude is the only provider carrying windows in the fixture
+        let with_windows: Vec<&str> = r
+            .providers
+            .iter()
+            .filter(|p| has_usage_windows(p))
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(with_windows, vec!["claude"]);
+    }
+
+    #[test]
+    fn windows_visible_regardless_of_status() {
+        // A provider serving cached windows (state.status = stale) or reporting a
+        // status crew-watch has never seen must still count as renderable: status
+        // is a display signal, not a visibility filter.
+        let r = parse_report(
+            r#"{ "providers": [
+              { "provider": "claude", "windows": [ { "id": "five_hour", "percentUsed": 40 } ],
+                "state": { "status": "stale", "stale": true } },
+              { "provider": "zai", "windows": [ { "id": "five_hour", "percentUsed": 12 } ] }
+            ] }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            r.providers[0].status,
+            ProviderStatus::Unknown("stale".to_string())
+        );
+        assert!(r.providers[0].stale);
+        assert!(has_usage_windows(&r.providers[0]));
+        // No `state` block at all ⇒ Unknown("missing"), still renderable.
+        assert_eq!(
+            r.providers[1].status,
+            ProviderStatus::Unknown("missing".to_string())
+        );
+        assert!(has_usage_windows(&r.providers[1]));
     }
 
     #[test]

@@ -190,11 +190,16 @@ deterministic width ladder on narrow terminals:
   kill-timeout. It is **never** on the `/proc` tick path, which stays read-once
   per refresh. A 60s floor is enforced because the quota tool rate-limits under
   faster polling.
-- **Provider selection.** Press `p` to open a checkbox dialog whose list comes
-  from whatever `quota-axi` actually reports (live, failing, and signed-out
-  providers) — never a hardcoded set. Selection is per provider, not per window.
-  The first run with no saved selection shows every provider that has data
-  ("auto"); explicitly clearing the list hides the row.
+- **Provider selection governs visibility.** Press `p` to open a checkbox dialog
+  whose list comes from whatever `quota-axi` actually reports (live, failing, and
+  signed-out providers) — never a hardcoded set. Selection is per provider, not
+  per window. A selected provider always gets its line, showing a dim status
+  phrase (`sign-in required`, `unavailable`) when it has no usage windows.
+  Freshness never hides anything: a provider serving cached data is dimmed and
+  suffixed `stale`, not dropped. On the first run with no saved selection the
+  selection is *seeded* from the providers currently reporting usage windows
+  ("auto") — a seed, not an ongoing filter, so your later choices win.
+  Explicitly clearing the list hides the row.
 - **Persistence.** The selection is stored at
   `${XDG_CONFIG_HOME:-~/.config}/crew-watch/config` as
   `quota_providers=claude,codex`. The file format is `key=value` (no TOML dep);

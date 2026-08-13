@@ -135,6 +135,11 @@ fn run<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<()> 
         let timeout = app.interval.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
             if let Event::Key(k) = event::read()? {
+                // Ctrl-C is the documented always-available escape hatch: it quits
+                // even with the dialog open (where Esc/q close the dialog instead).
+                if is_ctrl_c(&k) {
+                    return Ok(());
+                }
                 if app.dialog.is_some() {
                     handle_dialog_key(app, k);
                 } else {
@@ -159,9 +164,12 @@ fn run<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<()> 
 fn is_quit(k: &KeyEvent) -> bool {
     match k.code {
         KeyCode::Char('q') | KeyCode::Esc => true,
-        KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => true,
-        _ => false,
+        _ => is_ctrl_c(k),
     }
+}
+
+fn is_ctrl_c(k: &KeyEvent) -> bool {
+    matches!(k.code, KeyCode::Char('c')) && k.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 /// Open the provider-selection dialog. The item list is built from the latest
@@ -298,7 +306,7 @@ fn print_once(app: &App) {
 /// Print the quota lines for `--once`, after the agents table. Bar-free, one
 /// line per effective provider in report order; a fetch-level failure with an
 /// explicit selection prints a single greppable `quota: unavailable (...)` line.
-/// Auto mode with no live providers (or `--no-quota`) prints nothing.
+/// Auto mode with no provider reporting windows (or `--no-quota`) prints nothing.
 fn print_once_quota(app: &App) {
     use std::time::{SystemTime, UNIX_EPOCH};
     if !app.quota_enabled {
@@ -312,7 +320,7 @@ fn print_once_quota(app: &App) {
         crate::app::QuotaSelection::Auto => {
             if let Some(r) = &app.quota.report {
                 for p in &r.providers {
-                    if !p.windows.is_empty() {
+                    if crate::quota::has_usage_windows(p) {
                         let suffix = if p.stale { " (stale)" } else { "" };
                         println!("quota {}{}", crate::quota_row::once_line(p, now), suffix);
                     }

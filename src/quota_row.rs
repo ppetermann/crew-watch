@@ -11,8 +11,8 @@
 //! line fits independently. Bars never shrink below 6 cells — reset time is
 //! sacrificed before the bar becomes decoration. See [`Tier`].
 
-use crate::format_util::{format_reset, FILL_BLOCK, SHADE_BLOCK};
-use crate::quota::{parse_iso8601_utc_epoch, ProviderQuota, ProviderStatus};
+use crate::format_util::{format_reset, make_bar_min_one};
+use crate::quota::{has_usage_windows, parse_iso8601_utc_epoch, ProviderQuota, ProviderStatus};
 
 /// One piece of a rendered provider line. `pct` is `Some` when the segment
 /// should be colored with crew-watch's `pct_color` (the bar and the percentage),
@@ -121,31 +121,12 @@ fn reset_secs(resets_at: Option<&str>, now_epoch: u64) -> Option<u64> {
     Some(target.saturating_sub(now_epoch))
 }
 
-/// Build a usage bar with the min-one-filled-cell rule the row applies: a window
-/// with `percentUsed > 0` always shows at least one filled cell (otherwise 5% at
-/// bar-8 rounds to zero and renders fully empty). Uses crew-watch's `█░` glyphs.
-fn bar_min_one(pct: f64, width: usize) -> String {
-    let width = width.max(1);
-    let clamped = pct.clamp(0.0, 100.0);
-    let filled = ((clamped / 100.0) * width as f64).round() as usize;
-    let filled = filled.min(width);
-    let filled = if pct > 0.0 { filled.max(1) } else { filled };
-    let mut s = String::with_capacity(width * 3);
-    for _ in 0..filled {
-        s.push(FILL_BLOCK);
-    }
-    for _ in filled..width {
-        s.push(SHADE_BLOCK);
-    }
-    s
-}
-
 /// Render one provider line for the TUI at the given width. For a provider with
 /// no usable windows this is a single dim status phrase; otherwise it picks the
 /// best-fitting tier. `now_epoch` (UTC seconds) makes reset countdowns pure and
 /// testable without a system clock.
 pub fn build_provider_line(p: &ProviderQuota, now_epoch: u64, width: usize) -> Vec<RowSegment> {
-    if p.windows.is_empty() {
+    if !has_usage_windows(p) {
         return dim_status_line(&p.id, &p.status, p.error.as_deref());
     }
 
@@ -165,7 +146,7 @@ pub fn build_provider_line(p: &ProviderQuota, now_epoch: u64, width: usize) -> V
 /// without windows: `{id}: {phrase}` (e.g. `copilot: sign-in required`). The
 /// caller prefixes `quota ` and any per-line decoration.
 pub fn once_line(p: &ProviderQuota, now_epoch: u64) -> String {
-    if p.windows.is_empty() {
+    if !has_usage_windows(p) {
         return format!("{}: {}", p.id, status_phrase(&p.status, p.error.as_deref()));
     }
     let mut out = format!("{:<7}  ", p.id);
@@ -190,7 +171,7 @@ pub fn once_line(p: &ProviderQuota, now_epoch: u64) -> String {
 /// Dialog status note: live providers show `{plan} · {status}`; non-live ones
 /// show the short status phrase.
 pub fn dialog_note(p: &ProviderQuota) -> String {
-    if !p.windows.is_empty() {
+    if has_usage_windows(p) {
         let plan = p.plan.as_deref().unwrap_or("-");
         format!("{} · {}", plan, status_word(&p.status))
     } else {
@@ -243,7 +224,7 @@ fn build_tier(p: &ProviderQuota, now_epoch: u64, tier: Tier) -> Vec<RowSegment> 
         match tier.bar {
             Some(bw) => {
                 segs.push(RowSegment::colored(
-                    format!("{} ", bar_min_one(w.percent_used, bw)),
+                    format!("{} ", make_bar_min_one(w.percent_used, bw)),
                     w.percent_used,
                 ));
                 segs.push(RowSegment::colored(
