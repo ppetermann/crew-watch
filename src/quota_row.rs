@@ -19,13 +19,15 @@
 //! When several providers show at once, [`build_quota_rows`] renders them as one
 //! aligned block: every row shares a tier and per-column widths (label and
 //! reset fields padded to the block max), so bars line up down the rows even
-//! when labels or reset widths differ. The first tier whose widest aligned row
-//! fits the terminal wins. If no aligned tier fits, alignment is dropped first
-//! (it is the cheapest fidelity to lose) and each row degrades independently —
-//! exactly the single-row [`build_provider_line`] ladder. Bars never shrink
-//! below 6 cells; reset is sacrificed before the bar becomes decoration. A
-//! single provider is never padded for a column no other row needs. See
-//! [`Tier`].
+//! when labels or reset widths differ. Alignment is the cheapest fidelity to
+//! lose, so it is dropped *before* the tier ladder degrades: the block is used
+//! only at a tier at least as good as the one every row would reach on its own.
+//! The moment the padding would cost a row bar width or its reset, alignment
+//! goes and each row degrades independently through the single-row
+//! [`build_provider_line`] ladder — a cramped terminal renders exactly as it did
+//! before alignment existed. Bars never shrink below 6 cells; reset is
+//! sacrificed before the bar becomes decoration. A single provider is never
+//! padded for a column no other row needs. See [`Tier`].
 
 use crate::format_util::{format_reset, make_bar_min_one};
 use crate::quota::{
@@ -229,11 +231,12 @@ pub fn build_provider_line(p: &ProviderQuota, now_epoch: u64, width: usize) -> V
 ///
 /// At wide terminals every live row uses the same tier, so each window kind
 /// starts at the same column and bars line up even when labels or reset widths
-/// differ. If no aligned tier fits the terminal, alignment is dropped first —
-/// each live row then degrades through the [`build_provider_line`] ladder on its
-/// own, exactly as a cramped terminal does today (no wrapping or overflow). With
-/// a single live provider the column widths are that row's own, so nothing is
-/// padded for an absent neighbour.
+/// differ. Alignment is dropped before the ladder degrades: if the aligned block
+/// would only fit at a tier worse than the one some row reaches on its own, the
+/// padding goes and each live row degrades through the [`build_provider_line`]
+/// ladder independently, exactly as a cramped terminal did before alignment
+/// existed (no wrapping or overflow). With a single live provider the column
+/// widths are that row's own, so nothing is padded for an absent neighbour.
 pub fn build_quota_rows(
     providers: &[&ProviderQuota],
     now_epoch: u64,
@@ -360,7 +363,7 @@ struct BlockLayout {
 
 /// Compute the shared column widths for `provider_cols` at `tier`.
 fn compute_layout(
-    provider_cols: &[Vec<(usize, &QuotaWindow)>],
+    provider_cols: &[&[(usize, &QuotaWindow)]],
     id_w: usize,
     block_max_col: usize,
     tier: Tier,
@@ -373,7 +376,7 @@ fn compute_layout(
         })
         .collect();
     for pc in provider_cols {
-        for (c, w) in pc {
+        for (c, w) in pc.iter() {
             let full = window_label(&w.id, &w.label);
             let label_text = tier_label(full, tier.labels);
             cols[*c].label_w = cols[*c].label_w.max(label_text.chars().count());
@@ -407,9 +410,15 @@ fn render_aligned_row(
     segs.push(RowSegment::plain(format!(" {} ", id_field)));
 
     let barpart = tier.bar.map(|bw| bw + 1).unwrap_or(0);
+    // The inter-column separator belongs *between* columns, so it is keyed to
+    // the block's first filled column rather than to column 0: a block whose
+    // providers have no `session`/`week` window starts at column 2 and must not
+    // gain two leading spaces after the id field. Every row agrees on this
+    // column, so alignment is unaffected.
+    let first_used = column_used.iter().position(|used| *used).unwrap_or(0);
 
     for c in 0..=block_max_col {
-        let sep = if c == 0 { "" } else { "  " };
+        let sep = if c == first_used { "" } else { "  " };
         let win = provider_cols
             .iter()
             .find(|(col, _)| *col == c)
@@ -442,28 +451,26 @@ fn render_aligned_row(
             if tier.reset {
                 let reset_str = reset_secs(w.resets_at.as_deref(), now_epoch).map(format_reset);
                 let max_reset_len = layout.cols[c].reset_w;
-                // Pad the reset field only on interior columns, so the next
-                // column lines up; on the block's last column it is verbatim
-                // (nothing follows to align, and this avoids trailing spaces).
-                let interior = c < block_max_col && max_reset_len > 0;
-                match (reset_str.as_ref(), provider_has_later_col) {
-                    (Some(r), _) => {
-                        if interior {
-                            segs.push(RowSegment::plain(format!(
-                                " {:<rw$}",
-                                r,
-                                rw = max_reset_len
-                            )));
-                        } else {
-                            segs.push(RowSegment::plain(format!(" {}", r)));
-                        }
+                // Pad the reset field only when this row still renders a later
+                // column, so that column lines up; when nothing follows on this
+                // row the reset is verbatim (nothing to align against, and this
+                // avoids trailing spaces before the caller's own suffixes).
+                let interior = c < block_max_col && max_reset_len > 0 && provider_has_later_col;
+                match reset_str.as_ref() {
+                    Some(r) if interior => {
+                        segs.push(RowSegment::plain(format!(
+                            " {:<rw$}",
+                            r,
+                            rw = max_reset_len
+                        )));
                     }
-                    (None, true) if interior => {
+                    Some(r) => segs.push(RowSegment::plain(format!(" {}", r))),
+                    None if interior => {
                         // No reset for this window, but a later column needs the
                         // field width held constant: placeholder spaces.
                         segs.push(RowSegment::plain(format!(" {}", " ".repeat(max_reset_len))));
                     }
-                    (None, _) => {}
+                    None => {}
                 }
             }
         } else if provider_has_later_col && column_used.get(c).copied().unwrap_or(false) {
@@ -493,8 +500,11 @@ fn render_aligned_row(
     segs
 }
 
-/// Try every tier best-first and return the first whose every aligned row fits
-/// `width`. `None` when no aligned tier fits (caller falls back to independent
+/// Try the tiers best-first and return the first whose every aligned row fits
+/// `width`. Only tiers at least as good as every row's *own* best tier are
+/// considered: alignment padding is the cheapest fidelity to lose, so it is
+/// dropped before any row would degrade below what it reaches unaligned.
+/// `None` when no such aligned tier fits (caller falls back to independent
 /// per-row rendering).
 fn build_aligned_block(
     live: &[&ProviderQuota],
@@ -523,8 +533,19 @@ fn build_aligned_block(
         .max()
         .unwrap_or(0)
         .max(6);
-    for tier in TIERS {
-        let layout = compute_layout(&provider_cols, id_w, block_max_col, *tier, now_epoch);
+    // The strictest row wins: aligning at a tier worse than any row's own best
+    // would make the padding cost bar width or a reset countdown, and alignment
+    // is dropped before that happens. A row that fits at no tier at all (it will
+    // be hard-truncated) can never be aligned, so drop alignment outright.
+    let mut best_unaligned = TIERS.len() - 1;
+    for (p, cols) in live.iter().zip(provider_cols.iter()) {
+        let t = independent_tier_index(p, cols, now_epoch, width)?;
+        best_unaligned = best_unaligned.min(t);
+    }
+    let col_slices: Vec<&[(usize, &QuotaWindow)]> =
+        provider_cols.iter().map(|cs| cs.as_slice()).collect();
+    for tier in TIERS.iter().take(best_unaligned + 1) {
+        let layout = compute_layout(&col_slices, id_w, block_max_col, *tier, now_epoch);
         let rows: Vec<Vec<RowSegment>> = live
             .iter()
             .zip(provider_cols.iter())
@@ -554,55 +575,55 @@ fn build_aligned_block(
 /// or padded for an absent neighbour.
 fn build_row_independent(p: &ProviderQuota, now_epoch: u64, width: usize) -> Vec<RowSegment> {
     let provider_cols = provider_columns(&p.windows);
-    let block_max_col = provider_cols.iter().map(|(c, _)| *c).max().unwrap_or(0);
-    let column_used: Vec<bool> = {
-        let mut v = vec![false; block_max_col + 1];
-        for (c, _) in &provider_cols {
-            v[*c] = true;
-        }
-        v
-    };
-    let id_w = p.id.chars().count().max(6);
     for tier in TIERS {
-        let layout = compute_layout(
-            std::slice::from_ref(&provider_cols),
-            id_w,
-            block_max_col,
-            *tier,
-            now_epoch,
-        );
-        let segs = render_aligned_row(
-            &provider_cols,
-            p,
-            &layout,
-            block_max_col,
-            &column_used,
-            *tier,
-            now_epoch,
-        );
+        let segs = render_row_unaligned(p, &provider_cols, *tier, now_epoch);
         if line_width(&segs) <= width {
             return segs;
         }
     }
     // Exhausted every tier (absurdly narrow): hard-truncate the cheapest tier.
-    let tier = *TIERS.last().unwrap();
-    let layout = compute_layout(
-        std::slice::from_ref(&provider_cols),
-        id_w,
-        block_max_col,
-        tier,
-        now_epoch,
-    );
-    let fallback = render_aligned_row(
-        &provider_cols,
+    let fallback = render_row_unaligned(p, &provider_cols, *TIERS.last().unwrap(), now_epoch);
+    truncate_segments(fallback, width)
+}
+
+/// One provider's row at `tier` with no neighbours: the column widths are its
+/// own, so nothing is padded or blanked for a column another row would need.
+fn render_row_unaligned(
+    p: &ProviderQuota,
+    provider_cols: &[(usize, &QuotaWindow)],
+    tier: Tier,
+    now_epoch: u64,
+) -> Vec<RowSegment> {
+    let block_max_col = provider_cols.iter().map(|(c, _)| *c).max().unwrap_or(0);
+    let mut column_used = vec![false; block_max_col + 1];
+    for (c, _) in provider_cols {
+        column_used[*c] = true;
+    }
+    let id_w = p.id.chars().count().max(6);
+    let layout = compute_layout(&[provider_cols], id_w, block_max_col, tier, now_epoch);
+    render_aligned_row(
+        provider_cols,
         p,
         &layout,
         block_max_col,
         &column_used,
         tier,
         now_epoch,
-    );
-    truncate_segments(fallback, width)
+    )
+}
+
+/// Index of the best tier at which this provider's unaligned row fits `width`,
+/// i.e. the tier [`build_provider_line`] would pick for it on its own. `None`
+/// when no tier fits (that row is hard-truncated and can never be aligned).
+fn independent_tier_index(
+    p: &ProviderQuota,
+    provider_cols: &[(usize, &QuotaWindow)],
+    now_epoch: u64,
+    width: usize,
+) -> Option<usize> {
+    TIERS.iter().position(|tier| {
+        line_width(&render_row_unaligned(p, provider_cols, *tier, now_epoch)) <= width
+    })
 }
 
 fn line_width(segs: &[RowSegment]) -> usize {
@@ -1177,6 +1198,95 @@ mod tests {
                 line.chars().count()
             );
         }
+    }
+
+    #[test]
+    fn alignment_is_dropped_before_any_row_degrades() {
+        // At a width that fits every row's own best tier but not the aligned
+        // block, alignment is the fidelity that goes — not the bars. Each row
+        // must render exactly as it does on its own (12-cell bars + resets),
+        // rather than both rows dropping to a narrower shared tier.
+        let claude = claude();
+        let zai = zai_aligned();
+        let solo_claude = render(&build_provider_line(&claude, NOW, 300));
+        let solo_zai = render(&build_provider_line(&zai, NOW, 300));
+        let width = solo_claude.chars().count().max(solo_zai.chars().count());
+        let block = build_quota_rows(&[&claude, &zai], NOW, width);
+        assert_eq!(
+            (render(&block[0]), render(&block[1])),
+            (solo_claude.clone(), solo_zai.clone()),
+            "alignment dropped, each row keeps its own tier"
+        );
+        // Concretely: the top tier's 12-cell bars and resets survive.
+        assert!(solo_claude.contains("1h45m"), "{solo_claude}");
+        assert_eq!(
+            bar_starts(&render(&block[0])).len(),
+            3,
+            "{}",
+            render(&block[0])
+        );
+    }
+
+    #[test]
+    fn row_ending_at_an_interior_column_has_no_trailing_pad() {
+        // zai stops at `week` while claude carries a third column, and zai's
+        // week reset ("1d8h") is shorter than claude's ("3d22h"). The shared
+        // reset width must not pad zai's *last* field: nothing follows it on
+        // that row, and ui.rs appends its own suffixes (" stale") right after.
+        let claude = claude();
+        let mut zai = zai_aligned();
+        zai.windows.retain(|w| w.label != "MCP month");
+        let block = build_quota_rows(&[&claude, &zai], NOW, 200);
+        let a = render(&block[0]);
+        let b = render(&block[1]);
+        assert!(b.ends_with("1d8h"), "no trailing pad: {b:?}");
+        let sa = bar_starts(&a);
+        let sb = bar_starts(&b);
+        assert_eq!(
+            sa[..2],
+            sb[..],
+            "shared columns still aligned:\n  {a}\n  {b}"
+        );
+    }
+
+    #[test]
+    fn block_without_session_or_week_has_no_leading_separator() {
+        // Every window is an extra, so the block starts at column 2. The
+        // inter-column separator belongs between columns: the first label must
+        // follow the id field directly, not after two extra spaces.
+        let extras = |id: &str, pct: f64| ProviderQuota {
+            id: id.to_string(),
+            label: id.to_string(),
+            plan: None,
+            windows: vec![
+                QuotaWindow {
+                    id: "model:alpha".to_string(),
+                    label: "Alpha".to_string(),
+                    percent_used: pct,
+                    resets_at: Some("2026-08-17T12:00:00.000000+00:00".to_string()),
+                },
+                QuotaWindow {
+                    id: "model:beta".to_string(),
+                    label: "Beta".to_string(),
+                    percent_used: pct,
+                    resets_at: Some("2026-08-17T12:00:00.000000+00:00".to_string()),
+                },
+            ],
+            status: ProviderStatus::Fresh,
+            stale: false,
+            error: None,
+        };
+        let lone = extras("novel", 10.0);
+        let line = render(&build_provider_line(&lone, NOW, 120));
+        assert!(line.starts_with(" novel  alpha "), "{line:?}");
+        // And in a block, the rows still line up on that first extra column.
+        let other = extras("zai", 20.0);
+        let block = build_quota_rows(&[&lone, &other], NOW, 120);
+        let a = render(&block[0]);
+        let b = render(&block[1]);
+        assert!(a.starts_with(" novel  alpha "), "{a:?}");
+        assert!(b.starts_with(" zai    alpha "), "{b:?}");
+        assert_eq!(bar_starts(&a), bar_starts(&b), "aligned:\n  {a}\n  {b}");
     }
 
     #[test]
