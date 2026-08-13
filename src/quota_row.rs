@@ -208,7 +208,7 @@ fn dim_status_line(id: &str, status: &ProviderStatus, error: Option<&str>) -> Ve
 
 fn build_tier(p: &ProviderQuota, now_epoch: u64, tier: Tier) -> Vec<RowSegment> {
     let mut segs = Vec::with_capacity(2 + p.windows.len() * 4);
-    segs.push(RowSegment::plain(format!(" {:<7}", p.id)));
+    segs.push(RowSegment::plain(format!(" {:<6} ", p.id)));
     for (i, w) in p.windows.iter().enumerate() {
         let sep = if i == 0 { "" } else { "  " };
         let full_label = window_label(&w.id, &w.label);
@@ -372,6 +372,27 @@ mod tests {
     }
 
     // --- label rule, min-one-cell, clamp, missing reset ---
+
+    #[test]
+    fn long_provider_id_keeps_gap_before_first_label() {
+        // `copilot` is exactly 7 chars — the id field must still separate it from
+        // the first window label instead of running into it ("copilotsession").
+        let mut p = claude();
+        p.id = "copilot".to_string();
+        p.windows.truncate(1);
+        let line = render(&build_provider_line(&p, NOW, 110));
+        assert!(line.starts_with(" copilot session "), "{line}");
+    }
+
+    #[test]
+    fn short_provider_id_alignment_unchanged() {
+        // Ids up to 6 chars keep the original fixed id column (prefix width 8).
+        let mut p = claude();
+        p.id = "zai".to_string();
+        p.windows.truncate(1);
+        let line = render(&build_provider_line(&p, NOW, 110));
+        assert!(line.starts_with(" zai    session "), "{line}");
+    }
 
     #[test]
     fn model_label_rule() {
