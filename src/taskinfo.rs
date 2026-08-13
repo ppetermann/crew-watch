@@ -16,6 +16,21 @@
 //!
 //! The layering mirrors the detection table: to support a new fleet format,
 //! prepend another lookup step at the top of [`TaskInfo::resolve`].
+//!
+//! ### Record freshness (why the caller reloads per tick)
+//!
+//! Layer 1 matches an agent to a task by the process's cwd, and firstmate
+//! hands out worker copies from a **recycled worktree pool**: the same path is
+//! reused by task after task. So the fleet records and titles passed in here
+//! must reflect *current* on-disk state, not whatever was read when crew-watch
+//! launched — otherwise an agent spawned after launch inherits a path that, in
+//! a stale snapshot, still belongs to a task that finished hours ago, and gets
+//! rendered with that dead task's title at full confidence. [`crate::app::App`]
+//! therefore re-reads both sources from the firstmate home on every tick;
+//! [`crate::meta::load_fm_home`] and [`crate::titles::load_task_titles`] are
+//! best-effort, so a vanished source degrades to the lower layers instead of
+//! keeping a ghost label. The resolution logic itself is correct as written —
+//! only the age of its inputs was the bug.
 
 use std::path::Path;
 

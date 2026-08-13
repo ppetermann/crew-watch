@@ -144,6 +144,14 @@ wins.
    If no title is found, the task id is shown on its own. This is read-only and
    best-effort: a missing/unparseable home, record, backlog, or brief never
    fails.
+
+   Records and titles are re-read on **every refresh**, not once at launch, so a
+   long-running `crew-watch` follows task lifecycle: a task started after launch
+   shows its own title, and a worker copy recycled into a new task (firstmate
+   reuses worktree paths) follows the new task rather than the previous
+   occupant. When a record disappears, its agent falls through to the layers
+   below instead of keeping the dead task's label.
+
 2. **Unmatched agent, has a cwd**: the project name as a human-readable label.
    The project name is the git repo name when the cwd is inside a git repo
    (handles worktrees and bare-repo worktrees like no-mistakes), else the cwd
@@ -160,7 +168,9 @@ The MODEL column is parsed independently from the agent's `--model` argv flag
 
 - **Resource-light.** `/proc` is read exactly once per refresh: one directory
   scan plus per-pid `stat` / `cmdline` / `cwd` reads and the system files
-  (`/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/uptime`).
+  (`/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/uptime`). The
+  firstmate home — a handful of small files — is re-read on the same tick, for
+  the freshness reason described under *Task info sources*.
 - **Robust to churn.** A `/proc` entry that vanishes mid-read is skipped —
   `crew-watch` never panics on a disappearing process.
 - **Linux-only** for v1.
