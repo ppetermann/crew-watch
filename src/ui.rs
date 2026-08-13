@@ -19,7 +19,7 @@ use crate::format_util::{
 };
 use crate::procfs::{CpuLine, Snapshot};
 use crate::quota::{has_usage_windows, ProviderQuota};
-use crate::quota_row::build_provider_line;
+use crate::quota_row::build_quota_rows;
 use crate::taskinfo::fit_task_line;
 
 const MIN_CELL_WIDTH: usize = 18;
@@ -366,40 +366,15 @@ fn draw_quota(f: &mut Frame, area: Rect, app: &App) {
     let row_age = app.quota_fetch_age();
     let age_suffix = row_age.map(|d| format!(" ({} old)", format_age_compact(d.as_secs())));
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    let push_provider = |p: &ProviderQuota, lines: &mut Vec<Line<'static>>| {
-        let dim = row_age.is_some() || p.stale;
-        let segs = build_provider_line(p, now, area.width as usize);
-        let live = has_usage_windows(p);
-        let spans: Vec<Span<'static>> = segs
-            .iter()
-            .enumerate()
-            .map(|(i, seg)| {
-                if dim || !live {
-                    Span::styled(seg.text.clone(), Style::default().fg(Color::DarkGray))
-                } else if i == 0 {
-                    Span::styled(seg.text.clone(), Style::default().fg(runtime_color(&p.id)))
-                } else if let Some(pct) = seg.pct {
-                    Span::styled(seg.text.clone(), Style::default().fg(pct_color(pct)))
-                } else {
-                    Span::raw(seg.text.clone())
-                }
-            })
-            .collect();
-        let mut line = Line::from(spans);
-        if p.stale {
-            line.spans
-                .push(Span::styled(" stale", Style::default().fg(Color::DarkGray)));
-        }
-        lines.push(line);
-    };
-
+    // Collect the providers to display, in display order, then build the whole
+    // block through `build_quota_rows` so live rows share aligned columns.
+    let mut providers: Vec<&ProviderQuota> = Vec::new();
+    let mut have_report = true;
     match app.effective_selection() {
         QuotaSelection::Auto => {
             if let Some(r) = &app.quota.report {
                 for p in r.providers.iter().filter(|p| has_usage_windows(p)) {
-                    push_provider(p, &mut lines);
+                    providers.push(p);
                 }
             }
         }
@@ -408,19 +383,50 @@ fn draw_quota(f: &mut Frame, area: Rect, app: &App) {
                 match &app.quota.report {
                     Some(r) => {
                         for p in r.providers.iter().filter(|p| ids.contains(&p.id)) {
-                            push_provider(p, &mut lines);
+                            providers.push(p);
                         }
                     }
-                    None => {
-                        // D9: explicit selection, no report ⇒ one dim failure line.
-                        let err = app.quota.last_error.as_deref().unwrap_or("unavailable");
-                        lines.push(Line::from(Span::styled(
-                            format!(" quota: unavailable ({err})"),
-                            Style::default().fg(Color::DarkGray),
-                        )));
-                    }
+                    None => have_report = false,
                 }
             }
+        }
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // D9: explicit selection with no report ⇒ one dim failure line (no rows).
+    if !have_report {
+        let err = app.quota.last_error.as_deref().unwrap_or("unavailable");
+        lines.push(Line::from(Span::styled(
+            format!(" quota: unavailable ({err})"),
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        let block = build_quota_rows(&providers, now, area.width as usize);
+        for (p, segs) in providers.iter().zip(block.iter()) {
+            let dim = row_age.is_some() || p.stale;
+            let live = has_usage_windows(p);
+            let spans: Vec<Span<'static>> = segs
+                .iter()
+                .enumerate()
+                .map(|(i, seg)| {
+                    if dim || !live {
+                        Span::styled(seg.text.clone(), Style::default().fg(Color::DarkGray))
+                    } else if i == 0 {
+                        Span::styled(seg.text.clone(), Style::default().fg(runtime_color(&p.id)))
+                    } else if let Some(pct) = seg.pct {
+                        Span::styled(seg.text.clone(), Style::default().fg(pct_color(pct)))
+                    } else {
+                        Span::raw(seg.text.clone())
+                    }
+                })
+                .collect();
+            let mut line = Line::from(spans);
+            if p.stale {
+                line.spans
+                    .push(Span::styled(" stale", Style::default().fg(Color::DarkGray)));
+            }
+            lines.push(line);
         }
     }
 
