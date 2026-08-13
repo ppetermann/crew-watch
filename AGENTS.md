@@ -20,7 +20,7 @@ the full user-facing spec (install, usage, detection table, firstmate records).
 ### Build / test / lint (authoritative commands)
 
 - `cargo build --release` — binary at `target/release/crew-watch`.
-- `cargo test` — unit tests for the pure logic (parsing, detection, aggregation, meta, taskinfo). TUI rendering is intentionally untested in v1.
+- `cargo test` — unit tests for the pure logic (parsing, detection, aggregation, meta, taskinfo, quota). TUI rendering is intentionally untested in v1.
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` must stay clean (CI gates on them).
 - `crew-watch --once` — non-interactive one-shot dump; the way to verify detection/CPU/mem outside a TTY.
 
@@ -29,7 +29,8 @@ the full user-facing spec (install, usage, detection table, firstmate records).
 - `src/procfs.rs` — pure parsers (`parse_proc_pid_stat`, `parse_proc_stat`, `parse_meminfo`, `parse_loadavg`, `parse_uptime`, `parse_cmdline`) + `collect()` which reads `/proc` exactly once per tick.
 - `src/detect.rs` — `AGENT_KINDS` detection table, `extract_candidates`, `build_sessions` (subtree aggregation; nearest-enclosing-agent attribution so nested agents are separate rows excluded from ancestors).
 - `src/meta.rs` — firstmate `state/*.meta` parsing. `src/titles.rs` — backlog.md + brief.md title lookup. `src/taskinfo.rs` — layered `TASK` resolution (fleet title → cwd project → argv). `src/model.rs` — `--model` argv extraction. `src/project.rs` — git-repo project-name resolution from cwd (handles worktrees).
-- `src/ui.rs` — ratatui rendering. `src/format_util.rs` — human-readable formatting. `src/app.rs` — tick state; owns `fm_home` and re-reads fleet records + titles every tick (see the `src/taskinfo.rs` header for why that freshness is load-bearing). `src/cli.rs` — clap CLI. `src/main.rs` — entry point + event loop.
+- `src/quota.rs` — `quota-axi --json` parse (serde, schema-tolerant) + ISO-8601→epoch + background poller (`fetch_once`/`spawn_poller`, 10s kill-timeout, **never on the `/proc` tick path**). `src/quota_row.rs` — pure tiered line builder for the row. `src/quota_dialog.rs` — provider-selection dialog (pure state machine over `KeyCode`). `src/config.rs` — `key=value` config file (`~/.config/crew-watch/config`, `quota_providers=`), same read-tolerance idiom as `meta.rs`.
+- `src/ui.rs` — ratatui rendering. `src/format_util.rs` — human-readable formatting + the shared `make_bar`/`format_reset` used by both the system meters and the quota row. `src/app.rs` — tick state; owns `fm_home` and re-reads fleet records + titles every tick (see the `src/taskinfo.rs` header for why that freshness is load-bearing); quota state is drained from the poller off the tick path. `src/cli.rs` — clap CLI. `src/main.rs` — entry point + event loop.
 
 ### Sharp edge: building on a host without gcc
 

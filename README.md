@@ -14,6 +14,8 @@ agent session, with CPU% and memory aggregated over the agent's entire subtree
 │ per-core usage bars · mem/swap bars · tasks / load / uptime │
 ├─ agents ────────────────────────────────────────────────────┤
 │ RUNTIME   MODEL   PID   ELAPSED   CPU%   MEM   TASK         │
+├─────────────────────────────────────────────────────────────┤
+│ quota row: one line per provider (session/week/model bars)  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -41,6 +43,8 @@ crew-watch                 # interactive TUI, refresh every 2s
 crew-watch --interval 1    # refresh every 1s
 crew-watch --once          # one-shot text dump (no TTY) — handy for scripts/CI
 crew-watch --fm-home ~/agents/firstmate
+crew-watch --no-quota      # hide the quota row and skip the quota-axi fetch
+crew-watch --quota-interval 120  # refresh quota every 120s (clamped 60..=3600)
 ```
 
 Inside the TUI:
@@ -49,6 +53,7 @@ Inside the TUI:
 |----------------|--------|
 | `q` / `Esc`    | quit   |
 | `Ctrl-C`       | quit   |
+| `p`            | choose which quota providers get a row (when the quota row is enabled) |
 
 Keybindings are intentionally minimal for v1.
 
@@ -66,6 +71,7 @@ opencode   glm-5.2       28404      36:34     97.0%     927.2MiB  crew-watch: ad
 claude     opus          14405      41:27     18.0%     516.1MiB  away mode unusable: resurface fires ... [fm-afk-resurface-loop]
 claude     -              5463     2:50:31      0.0%     560.0MiB  interactive @ firstmate
 ...
+quota claude   session 5% 1h45m  week 48% 3d22h  fable 45% 3d22h
 ```
 
 ## Layout
@@ -164,6 +170,47 @@ The MODEL column is parsed independently from the agent's `--model` argv flag
 (both `--model X` and `--model=X`), with any provider prefix
 (`org/model-family` → `model-family`) stripped. No flag → `-`.
 
+## Quota row
+
+Directly above the help line, crew-watch shows **one borderless line per
+selected quota provider** — session / week / per-model usage bars in crew-watch's
+own `█░` style, plus a percent and a reset countdown, degrading through a
+deterministic width ladder on narrow terminals:
+
+```text
+ claude session █░░░░░░░░░░░   5% 1h45m  week ██████░░░░░░  48% 3d22h  fable █████░░░░░░░  45% 3d22h
+```
+
+- **Source.** `quota-axi --json` (schema 3 today, parsed schema-tolerantly — an
+  additive field or an unknown `schemaVersion` is ignored, not fatal). One
+  provider = one line of its windows; a future provider (e.g. z.ai) appears with
+  zero code change.
+- **Cadence.** The fetch runs on a **background thread** at its own cadence
+  (default 300s; `--quota-interval`, clamped 60..=3600) and is bounded by a 10s
+  kill-timeout. It is **never** on the `/proc` tick path, which stays read-once
+  per refresh. A 60s floor is enforced because the quota tool rate-limits under
+  faster polling.
+- **Provider selection.** Press `p` to open a checkbox dialog whose list comes
+  from whatever `quota-axi` actually reports (live, failing, and signed-out
+  providers) — never a hardcoded set. Selection is per provider, not per window.
+  The first run with no saved selection shows every provider that has data
+  ("auto"); explicitly clearing the list hides the row.
+- **Persistence.** The selection is stored at
+  `${XDG_CONFIG_HOME:-~/.config}/crew-watch/config` as
+  `quota_providers=claude,codex`. The file format is `key=value` (no TOML dep);
+  unknown keys are preserved on save.
+- **Failure behaviour.** Every quota failure is non-fatal and leaves the core
+  monitor working: a missing binary in auto mode shows no row; an explicit
+  selection whose fetch fails shows one dim `quota: unavailable (...)` line;
+  a provider that is signed-out or erroring shows a dim status phrase only when
+  selected; after repeated fetch misses the row dims and gains an `(Xm old)`
+  suffix while keeping the last good report.
+- **`--no-quota`** disables the row and the background fetch entirely (the
+  layout is then byte-identical to a build without the feature).
+
+In `--once` the same data prints bar-free, one line per effective provider:
+`quota claude   session 5% 1h45m  week 48% 3d22h  fable 45% 3d22h`.
+
 ## Design notes & constraints
 
 - **Resource-light.** `/proc` is read exactly once per refresh: one directory
@@ -191,9 +238,9 @@ CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`,
 request.
 
 The pure logic — `/proc` parsing, agent detection, subtree aggregation, meta
-parsing, model extraction, title lookup, project-name resolution, and task
-resolution — is unit-tested with fixture data. The TUI rendering itself is not
-unit-tested in v1.
+parsing, model extraction, title lookup, project-name resolution, task
+resolution, quota parsing/row-building/dialog, and config — is unit-tested with
+fixture data. The TUI rendering itself is not unit-tested in v1.
 
 ## License
 

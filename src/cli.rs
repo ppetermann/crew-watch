@@ -27,4 +27,17 @@ pub struct Cli {
     /// scripting and for verifying detection outside a TTY.
     #[arg(long, default_value_t = false)]
     pub once: bool,
+
+    /// Disable the quota row and the `quota-axi` background fetch entirely.
+    #[arg(long, default_value_t = false)]
+    pub no_quota: bool,
+
+    /// Seconds between `quota-axi` refreshes. Defaults to 300 (5 minutes) and is
+    /// clamped to 60..=3600. The 60s floor is **not arbitrary**: the captain got
+    /// rate-limited polling the quota tool every 2 minutes, so polling faster
+    /// than once a minute is treated as a misconfiguration and refused. The
+    /// fetch itself still runs off the `/proc` tick path on a background thread
+    /// and is bounded by a 10s kill-timeout regardless of this value.
+    #[arg(long, default_value_t = 300.0)]
+    pub quota_interval: f64,
 }
