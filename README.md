@@ -185,6 +185,18 @@ deterministic width ladder on narrow terminals:
   additive field or an unknown `schemaVersion` is ignored, not fatal). One
   provider = one line of its windows; a future provider (e.g. z.ai) appears with
   zero code change.
+- **Window order is canonical, never source order.** Windows always render as
+  `session` first, then `week`, then the provider's remaining windows sorted
+  alphabetically by their displayed label — so every provider's line reads the
+  same way regardless of the order the API happened to return, with no
+  per-provider special-casing. This holds in the TUI and in `--once`.
+- **Bars line up down the rows.** When several providers are shown, their rows
+  share column positions, so the bars stack under each other even when labels or
+  reset countdowns differ in width. Alignment is the first fidelity dropped on a
+  narrow terminal — below that, each row degrades through the width ladder on
+  its own, exactly as a single row does — and a lone provider is never padded
+  for a column no other row needs. This is TUI-only: `--once` stays bar-free and
+  unaligned, so its output stays easy to script against.
 - **Cadence.** The fetch runs on a **background thread** at its own cadence
   (default 300s; `--quota-interval`, clamped 60..=3600) and is bounded by a 10s
   kill-timeout. It is **never** on the `/proc` tick path, which stays read-once
