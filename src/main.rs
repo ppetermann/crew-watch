@@ -29,8 +29,6 @@ use ratatui::Terminal;
 
 use crate::app::App;
 use crate::cli::Cli;
-use crate::meta::load_fm_home;
-use crate::titles::load_task_titles;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -41,9 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let interval = Duration::from_secs_f64(interval_secs);
     let fm_home = resolve_fm_home(cli.fm_home);
-    let records = load_fm_home(&fm_home);
-    let titles = load_task_titles(&fm_home);
-    let mut app = App::new(interval, records, titles);
+    let mut app = App::new(interval, fm_home);
 
     if cli.once {
         // Two samples ~1s apart so CPU% deltas are real (not all zero).
