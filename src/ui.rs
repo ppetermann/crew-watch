@@ -4,16 +4,22 @@
 //! depends on (parsing, detection, aggregation, task resolution) is unit-tested
 //! in the other modules.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, QuotaSelection};
 use crate::detect::{AgentKind, AGENT_KINDS};
-use crate::format_util::{format_duration, format_kib, format_percent, format_uptime};
+use crate::format_util::{
+    format_age_compact, format_duration, format_kib, format_percent, format_uptime, make_bar,
+};
 use crate::procfs::{CpuLine, Snapshot};
+use crate::quota::{has_usage_windows, ProviderQuota};
+use crate::quota_row::build_provider_line;
 use crate::taskinfo::fit_task_line;
 
 const MIN_CELL_WIDTH: usize = 18;
@@ -26,17 +32,34 @@ const AGENT_COL_SPACING: u16 = 1;
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
     let top_h = top_height(app.snapshot(), area.width);
+    let quota_h = app.quota_lines_count() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(top_h),
             Constraint::Min(4),
+            Constraint::Length(quota_h),
             Constraint::Length(1),
         ])
         .split(area);
     draw_top(f, chunks[0], app);
     draw_agents(f, chunks[1], app);
-    draw_help(f, chunks[2], app);
+    draw_quota(f, chunks[2], app);
+    draw_help(f, chunks[3], app);
+    // The dialog overlays the agents area, rendered last so it sits on top.
+    if let Some(dialog) = app.dialog.as_ref() {
+        if let Some(rect) = centered_dialog(area, dialog.items.len()) {
+            draw_dialog(f, rect, app);
+        }
+    }
+}
+
+/// Current UTC epoch seconds (for quota reset countdowns at render time).
+fn current_epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Height the top panel needs given terminal width (core grid is columnar).
@@ -202,20 +225,6 @@ fn format_cell(corenum: usize, pct: f64, bar_w: usize, cell_w: usize) -> String 
     s
 }
 
-fn make_bar(pct: f64, width: usize) -> String {
-    let width = width.max(1);
-    let filled = ((pct.clamp(0.0, 100.0) / 100.0) * width as f64).round() as usize;
-    let filled = filled.min(width);
-    let mut s = String::with_capacity(width * 3);
-    for _ in 0..filled {
-        s.push('\u{2588}'); // full block
-    }
-    for _ in filled..width {
-        s.push('\u{2591}'); // light shade
-    }
-    s
-}
-
 fn ratio(used: u64, total: u64) -> f64 {
     if total == 0 {
         0.0
@@ -321,10 +330,175 @@ fn kind_color(kind: &AgentKind) -> Color {
 fn draw_help(f: &mut Frame, area: Rect, app: &App) {
     let interval = app.interval.as_secs_f64();
     let agent_ids: Vec<&str> = AGENT_KINDS.iter().map(|k| k.id).collect();
+    // A transient notice (e.g. config save failed) takes over the help line
+    // until the next keypress clears it; otherwise show the normal bindings,
+    // with `p providers` present only when the quota row is enabled.
+    if let Some(notice) = &app.notice {
+        let line = Line::from(Span::styled(
+            format!(" {notice}"),
+            Style::default().fg(Color::Yellow),
+        ));
+        f.render_widget(Paragraph::new(line), area);
+        return;
+    }
+    let providers_binding = if app.quota_enabled {
+        "  |  p providers"
+    } else {
+        ""
+    };
     let line = Line::from(format!(
-        " q/Esc/Ctrl-C quit  |  refresh {:.1}s  |  detecting: {}",
+        " q/Esc/Ctrl-C quit{providers_binding}  |  refresh {:.1}s  |  detecting: {}",
         interval,
         agent_ids.join(", "),
     ));
     f.render_widget(Paragraph::new(line), area);
+}
+
+// ---------------------------------------------------------------------------
+// Quota row
+// ---------------------------------------------------------------------------
+
+fn draw_quota(f: &mut Frame, area: Rect, app: &App) {
+    if area.height == 0 {
+        return;
+    }
+    let now = current_epoch_secs();
+    let row_age = app.quota_fetch_age();
+    let age_suffix = row_age.map(|d| format!(" ({} old)", format_age_compact(d.as_secs())));
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let push_provider = |p: &ProviderQuota, lines: &mut Vec<Line<'static>>| {
+        let dim = row_age.is_some() || p.stale;
+        let segs = build_provider_line(p, now, area.width as usize);
+        let live = has_usage_windows(p);
+        let spans: Vec<Span<'static>> = segs
+            .iter()
+            .enumerate()
+            .map(|(i, seg)| {
+                if dim || !live {
+                    Span::styled(seg.text.clone(), Style::default().fg(Color::DarkGray))
+                } else if i == 0 {
+                    Span::styled(seg.text.clone(), Style::default().fg(runtime_color(&p.id)))
+                } else if let Some(pct) = seg.pct {
+                    Span::styled(seg.text.clone(), Style::default().fg(pct_color(pct)))
+                } else {
+                    Span::raw(seg.text.clone())
+                }
+            })
+            .collect();
+        let mut line = Line::from(spans);
+        if p.stale {
+            line.spans
+                .push(Span::styled(" stale", Style::default().fg(Color::DarkGray)));
+        }
+        lines.push(line);
+    };
+
+    match app.effective_selection() {
+        QuotaSelection::Auto => {
+            if let Some(r) = &app.quota.report {
+                for p in r.providers.iter().filter(|p| has_usage_windows(p)) {
+                    push_provider(p, &mut lines);
+                }
+            }
+        }
+        QuotaSelection::Explicit(ids) => {
+            if !ids.is_empty() {
+                match &app.quota.report {
+                    Some(r) => {
+                        for p in r.providers.iter().filter(|p| ids.contains(&p.id)) {
+                            push_provider(p, &mut lines);
+                        }
+                    }
+                    None => {
+                        // D9: explicit selection, no report ⇒ one dim failure line.
+                        let err = app.quota.last_error.as_deref().unwrap_or("unavailable");
+                        lines.push(Line::from(Span::styled(
+                            format!(" quota: unavailable ({err})"),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    // Whole-row fetch staleness: append the age suffix to the first line.
+    if let Some(suffix) = &age_suffix {
+        if let Some(line) = lines.first_mut() {
+            line.spans.push(Span::styled(
+                suffix.clone(),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    }
+
+    if !lines.is_empty() {
+        f.render_widget(Paragraph::new(lines), area);
+    }
+}
+
+/// Color for a provider/runtime id, reusing the agents-table palette. Unknown
+/// ids default to `Color::White` so a future provider (e.g. z.ai) is visible.
+fn runtime_color(id: &str) -> Color {
+    match id {
+        "claude" => Color::Magenta,
+        "opencode" => Color::Cyan,
+        "codex" => Color::Blue,
+        "grok" => Color::LightGreen,
+        "kimi" => Color::LightBlue,
+        "muse" => Color::LightYellow,
+        "pi" => Color::LightRed,
+        _ => Color::White,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Quota provider-selection dialog overlay
+// ---------------------------------------------------------------------------
+
+/// Centered rect for the dialog: width `min(50, area.width-4)`, height
+/// `items+4` (border + header gap + footer + items). Returns `None` when there
+/// is no room.
+fn centered_dialog(area: Rect, item_count: usize) -> Option<Rect> {
+    let h = (item_count as u16 + 4).min(area.height);
+    let w = (50u16).min(area.width.saturating_sub(4));
+    if h == 0 || w == 0 {
+        return None;
+    }
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Some(Rect::new(x, y, w, h))
+}
+
+fn draw_dialog(f: &mut Frame, area: Rect, app: &App) {
+    let dialog = app.dialog.as_ref().expect("dialog present");
+    // Clear the background under the overlay so the agents table doesn't show
+    // through.
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Quota providers");
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (i, item) in dialog.items.iter().enumerate() {
+        let mark = if item.selected { "[x]" } else { "[ ]" };
+        let cursor = if i == dialog.cursor { "▶" } else { " " };
+        let checkbox = format!(" {cursor}{mark} {:<10} {}", item.id, item.note);
+        let style = if i == dialog.cursor {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else if !item.reported {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(checkbox, style)));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " space toggle · enter save · esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }

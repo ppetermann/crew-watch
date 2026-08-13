@@ -48,6 +48,75 @@ pub fn format_percent(pct: f64) -> String {
     format!("{:.1}%", pct)
 }
 
+/// Full-block glyph used by every bar in crew-watch (CPU, memory, swap, quota).
+pub const FILL_BLOCK: char = '\u{2588}'; // full block
+/// Light-shade glyph pairing [`FILL_BLOCK`] for the empty portion of a bar.
+pub const SHADE_BLOCK: char = '\u{2591}'; // light shade
+
+/// Build a fixed-width usage bar in crew-watch's `█░` style. `pct` is clamped to
+/// 0–100; the filled count is `round(pct/100 * width)`. Used by the system
+/// meters (CPU core cells, memory, swap); the quota row uses
+/// [`make_bar_min_one`] so every bar in the UI shares these glyphs and rounding.
+pub fn make_bar(pct: f64, width: usize) -> String {
+    build_bar(pct, width, false)
+}
+
+/// [`make_bar`] with the min-one-filled-cell rule the quota row needs: any
+/// `pct > 0` shows at least one filled cell, so a 5% window at bar-8 reads as
+/// "a little used" instead of rounding away to a fully empty bar.
+pub fn make_bar_min_one(pct: f64, width: usize) -> String {
+    build_bar(pct, width, true)
+}
+
+fn build_bar(pct: f64, width: usize, min_one: bool) -> String {
+    let width = width.max(1);
+    let filled = ((pct.clamp(0.0, 100.0) / 100.0) * width as f64).round() as usize;
+    let filled = filled.min(width);
+    let filled = if min_one && pct > 0.0 {
+        filled.max(1)
+    } else {
+        filled
+    };
+    let mut s = String::with_capacity(width * 3);
+    for _ in 0..filled {
+        s.push(FILL_BLOCK);
+    }
+    for _ in filled..width {
+        s.push(SHADE_BLOCK);
+    }
+    s
+}
+
+/// Compact "time until reset" label for a quota window, given seconds remaining.
+/// `≥1d → "{d}d{h}h"`, `≥1h → "{h}h{m}m"`, else `"{m}m"` (so `9m`, `1h45m`,
+/// `3d22h`). Minutes are dropped once days are shown (the day/hour pair is
+/// enough resolution for a reset countdown).
+pub fn format_reset(secs: u64) -> String {
+    let days = secs / 86_400;
+    let h = (secs % 86_400) / 3600;
+    let m = (secs % 3600) / 60;
+    if days >= 1 {
+        format!("{}d{}h", days, h)
+    } else if h >= 1 {
+        format!("{}h{}m", h, m)
+    } else {
+        format!("{}m", m)
+    }
+}
+
+/// Compact age label for the staleness suffix, scaling to hours once a cadence
+/// of repeated failures pushes the age past an hour (e.g. at the 5-minute quota
+/// cadence a few stacked misses). `<60m → "{m}m"`, else `"{h}h{m}m"`.
+pub fn format_age_compact(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    if h >= 1 {
+        format!("{}h{}m", h, m)
+    } else {
+        format!("{}m", m.max(1))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,5 +152,49 @@ mod tests {
     fn fmt_percent() {
         assert_eq!(format_percent(12.34), "12.3%");
         assert_eq!(format_percent(0.0), "0.0%");
+    }
+
+    #[test]
+    fn fmt_make_bar() {
+        // Full / empty extremes.
+        assert_eq!(make_bar(0.0, 4), "░░░░");
+        assert_eq!(make_bar(100.0, 4), "████");
+        // 50% of 4 rounds to 2 filled.
+        assert_eq!(make_bar(50.0, 4), "██░░");
+        // Out-of-range clamps for fill only.
+        assert_eq!(make_bar(150.0, 4), "████");
+        assert_eq!(make_bar(-5.0, 4), "░░░░");
+        // width 0 collapses to 1 (never panics).
+        assert_eq!(make_bar(50.0, 0).chars().count(), 1);
+    }
+
+    #[test]
+    fn fmt_make_bar_min_one() {
+        // Identical to make_bar except that a non-zero pct never rounds to empty.
+        assert_eq!(make_bar(5.0, 8), "░░░░░░░░");
+        assert_eq!(make_bar_min_one(5.0, 8), "█░░░░░░░");
+        // Zero stays empty; everything else matches make_bar exactly.
+        assert_eq!(make_bar_min_one(0.0, 8), make_bar(0.0, 8));
+        assert_eq!(make_bar_min_one(50.0, 4), make_bar(50.0, 4));
+        assert_eq!(make_bar_min_one(150.0, 4), make_bar(150.0, 4));
+        assert_eq!(make_bar_min_one(-5.0, 4), make_bar(-5.0, 4));
+        assert_eq!(make_bar_min_one(50.0, 0).chars().count(), 1);
+    }
+
+    #[test]
+    fn fmt_reset() {
+        assert_eq!(format_reset(0), "0m");
+        assert_eq!(format_reset(540), "9m");
+        assert_eq!(format_reset(6300), "1h45m");
+        assert_eq!(format_reset(338_700), "3d22h"); // 3d 22h 5m -> minutes dropped
+                                                    // Day boundary exactly.
+        assert_eq!(format_reset(86_400), "1d0h");
+    }
+
+    #[test]
+    fn fmt_age_compact() {
+        assert_eq!(format_age_compact(30), "1m"); // sub-minute floors to 1m
+        assert_eq!(format_age_compact(900), "15m");
+        assert_eq!(format_age_compact(5400), "1h30m");
     }
 }
