@@ -65,13 +65,14 @@ to verify detection or to script a fleet check without a terminal:
 
 ```
 $ crew-watch --once
-cores=20 mem=13.5GiB/30.6GiB swap=2.7GiB/128.0GiB tasks=1404 load=3.10 2.59 1.95 up=3d 0:03:01
+cores=20 mem=12.8GiB/30.6GiB swap=2.7GiB/128.0GiB tasks=1092 load=1.63 1.70 1.87 up=3d 0:19:57
 RUNTIME    MODEL              PID    ELAPSED      CPU%          MEM  TASK
-opencode   glm-5.3        2098092      14:35    118.5%     995.0MiB  right-align the ELAPSED, CPU% and MEM columns [crewwatch-numeric-column-align]
-opencode   glm-5.3        2097118      15:02    118.5%       1.0GiB  public share link for a tenant's upcoming timers [evemembers-public-timer-share]
-claude     -               483889   51:17:27      1.0%     592.3MiB  interactive @ firstmate
-quota claude   session 11% 1h31m  week 53% 3d2h  fable 50% 3d2h
-quota zai      session 41% 2h57m  week 8% 16h21m  MCP month 0% 10d16h
+opencode   glm-5.3        2097118      31:59     77.5%     848.6MiB  eve-members: public share link for a tenant's upcoming timers
+opencode   glm-5.3        2098092      31:32     75.5%       1.1GiB  crew-watch: right-align the ELAPSED, CPU% and MEM columns
+claude     -               483889   51:34:23      1.0%     594.2MiB  interactive @ firstmate
+...
+quota claude   session 12% 1h14m  week 53% 3d2h  fable 50% 3d2h
+quota zai      session 51% 2h40m  week 10% 16h4m  MCP month 0% 10d16h
 ```
 
 ## Layout
@@ -148,13 +149,18 @@ wins.
    home (env `CREW_WATCH_FM_HOME`, or default `~/agents/firstmate`) contains
    `state/*.meta` files, each records `worktree=`, `project=`,
    `endpoint_task_id=`, etc. `crew-watch` matches an agent process to a record
-   via its cwd (the worktree path). When the task id resolves to a human title
-   from `data/backlog.md` (or, as a fallback, the first sentence of
-   `data/<task-id>/brief.md`), the column shows that title with the task id in
-   brackets, e.g. `away mode unusable: resurface fires ... [fm-afk-resurface-loop]`.
-   If no title is found, the task id is shown on its own. This is read-only and
-   best-effort: a missing/unparseable home, record, backlog, or brief never
-   fails.
+   via its cwd (the worktree path). The task line is prefixed with the
+   **basename of the record's `project=` path** so the project is explicit,
+   e.g. `crew-watch: right-align the ELAPSED, CPU% and MEM columns`. Under
+   width pressure the title is what shortens; the project prefix survives
+   (and only ellipsizes itself when the column cannot even hold it). With a
+   project known, the old bracketed task-id suffix is dropped — it only ever
+   carried the project, inferable from ids that happened to start with it; a
+   record without `project=` degrades to the older
+   `title [task-id]` form so the id still serves as reference. If no title is
+   found at all, the task id is shown (prefixed by the project when known).
+   This is read-only and best-effort: a missing/unparseable home, record,
+   backlog, or brief never fails.
 
    Records and titles are re-read on **every refresh**, not once at launch, so a
    long-running `crew-watch` follows task lifecycle: a task started after launch
