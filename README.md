@@ -102,6 +102,11 @@ magnitudes stack and rows compare at a glance; text columns (`RUNTIME`,
 `MODEL`, `TASK`) are left-aligned. The TUI table and `--once` follow the
 same rule.
 
+On a terminal too narrow for the full table the TUI shrinks the fixed columns
+and the values shorten by unit and precision first (`848.6MiB` → `849MiB` →
+`849M`, `38:23:40` → `38:23` → `38h`), never by losing their leading digits —
+so a magnitude is never misread. Nothing wraps or overflows at any width.
+
 Rows are sorted by aggregated CPU% descending. If no agent runtime is running,
 the panel shows an empty-state hint instead of going blank.
 
