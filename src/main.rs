@@ -1,6 +1,7 @@
 //! crew-watch entry point: argument parsing, terminal setup/teardown, and the
 //! render/tick event loop.
 
+mod agent_cols;
 mod app;
 mod cli;
 mod config;
@@ -232,9 +233,11 @@ fn resolve_fm_home(arg: Option<PathBuf>) -> PathBuf {
 /// TASK plus the separating spaces.
 const ONCE_TASK_PREFIX_WIDTH: usize = 69;
 
-/// Header line of the agent table in `--once` output. Column alignment
+/// Header line of the agent table in `--once` output. Column *alignment*
 /// mirrors the TUI table (src/ui.rs): numeric columns — PID, ELAPSED, CPU%,
-/// MEM — right-align so magnitudes stack; text columns stay left-aligned.
+/// MEM — right-align so magnitudes stack; text columns stay left-aligned. The
+/// column widths are this surface's own: `--once` writes to a plain stream and
+/// never reflows, so they need not match the TUI's.
 fn once_agent_header() -> String {
     format!(
         "{:<10} {:<14} {:>7} {:>10} {:>9} {:>12}  TASK",
@@ -242,8 +245,8 @@ fn once_agent_header() -> String {
     )
 }
 
-/// One agent row in `--once` output; same column geometry and alignment as
-/// [`once_agent_header`] and the TUI table.
+/// One agent row in `--once` output, in the column geometry of
+/// [`once_agent_header`] and sharing the TUI table's per-column alignment.
 fn once_agent_row(
     kind: &str,
     model: &str,
@@ -456,7 +459,7 @@ mod tests {
         );
 
         // PID: an identifier, but right-aligned with the rest of the numeric
-        // block (same call as the TUI table; see src/ui.rs).
+        // block (the same convention as the TUI table; see src/ui.rs).
         assert_eq!(right_edge(&short, "827115"), right_edge(&long, "483889"));
 
         // Headers sit over the same right edges as their column's values.

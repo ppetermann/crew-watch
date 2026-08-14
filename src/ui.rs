@@ -12,11 +12,13 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
+use crate::agent_cols::{
+    compressed_col_widths, fit_cpu, fit_elapsed, fit_header, fit_mem, fit_pid, task_width,
+    AGENT_COL_SPACING,
+};
 use crate::app::{App, QuotaSelection};
 use crate::detect::{AgentKind, AGENT_KINDS};
-use crate::format_util::{
-    format_age_compact, format_duration, format_kib, format_percent, format_uptime, make_bar,
-};
+use crate::format_util::{format_age_compact, format_kib, format_uptime, make_bar};
 use crate::procfs::{CpuLine, Snapshot};
 use crate::quota::{has_usage_windows, ProviderQuota};
 use crate::quota_row::build_quota_rows;
@@ -24,18 +26,19 @@ use crate::taskinfo::fit_task_line;
 const MIN_CELL_WIDTH: usize = 18;
 const MAX_COLS: usize = 8;
 const MEM_BAR_WIDTH: usize = 20;
-/// Fixed widths of every agent-table column before the flexible TASK column.
-const AGENT_FIXED_COL_WIDTHS: [u16; 6] = [10, 14, 8, 10, 9, 12];
-const AGENT_COL_SPACING: u16 = 1;
 
 /// Right-aligned cell for the agent table's numeric columns (PID, ELAPSED,
 /// CPU%, MEM): their magnitudes stack on the right edge so rows compare at a
 /// glance. PID joins them — like htop and `ps`, and matching `--once` — even
 /// though it is an identifier, not a magnitude; digits read as one numeric
-/// block. Text columns (RUNTIME, MODEL, TASK) stay left-aligned, and
-/// `--once` formats the same columns right-aligned, so the two surfaces stay
-/// consistent. Over-width content truncates (alignment ignored), exactly as
-/// the left-aligned cells always have.
+/// block. Text columns (RUNTIME, MODEL, TASK) stay left-aligned, and `--once`
+/// aligns the same columns the same way, so the two surfaces read alike (the
+/// column *widths* differ by design; only alignment is shared).
+///
+/// Callers must pass content already fitted to the column's width via the
+/// [`crate::agent_cols`] helpers: ratatui truncates an over-width
+/// right-aligned line from the left, which would drop exactly the magnitude
+/// digits this alignment exists to line up.
 fn right_cell(text: String) -> Cell<'static> {
     Cell::from(Text::from(text).alignment(Alignment::Right))
 }
@@ -279,22 +282,30 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
+    // The widths the fixed columns actually get at this terminal width: the
+    // nominal ones when they fit, a proportional shrink when they do not.
+    // They serve as both the table constraints and every numeric cell's
+    // fitting budget, so ratatui never has to shrink a column itself and the
+    // right-aligned cells are never truncated from the left.
+    let cols = compressed_col_widths(area.width);
+    let (pid_w, elapsed_w, cpu_w, mem_w) = (
+        cols[2] as usize,
+        cols[3] as usize,
+        cols[4] as usize,
+        cols[5] as usize,
+    );
+    let task_w = task_width(area.width, &cols);
+
     let header = Row::new(vec![
         Cell::from("RUNTIME"),
         Cell::from("MODEL"),
-        right_cell("PID".to_string()),
-        right_cell("ELAPSED".to_string()),
-        right_cell("CPU%".to_string()),
-        right_cell("MEM".to_string()),
+        right_cell(fit_header("PID", pid_w)),
+        right_cell(fit_header("ELAPSED", elapsed_w)),
+        right_cell(fit_header("CPU%", cpu_w)),
+        right_cell(fit_header("MEM", mem_w)),
         Cell::from("TASK"),
     ])
     .style(Style::default().add_modifier(Modifier::BOLD));
-
-    // Width the TASK column actually gets: total minus borders, the fixed
-    // columns, and the spacing between all seven columns.
-    let fixed: u16 = AGENT_FIXED_COL_WIDTHS.iter().sum();
-    let spacing = AGENT_COL_SPACING * AGENT_FIXED_COL_WIDTHS.len() as u16;
-    let task_width = area.width.saturating_sub(2 + fixed + spacing).max(1) as usize;
 
     let rows = app.sessions.iter().map(|s| {
         Row::new(vec![
@@ -304,23 +315,16 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
             } else {
                 s.model.clone()
             }),
-            right_cell(s.pid.to_string()),
-            right_cell(format_duration(s.elapsed_secs)),
-            right_cell(format_percent(s.cpu_percent))
+            right_cell(fit_pid(s.pid, pid_w)),
+            right_cell(fit_elapsed(s.elapsed_secs, elapsed_w)),
+            right_cell(fit_cpu(s.cpu_percent, cpu_w))
                 .style(Style::default().fg(pct_color(s.cpu_percent))),
-            right_cell(format_kib(s.rss_kib)),
-            Cell::from(fit_task_line(
-                s.task_project.as_deref(),
-                &s.task,
-                task_width,
-            )),
+            right_cell(fit_mem(s.rss_kib, mem_w)),
+            Cell::from(fit_task_line(s.task_project.as_deref(), &s.task, task_w)),
         ])
     });
 
-    let mut constraints: Vec<Constraint> = AGENT_FIXED_COL_WIDTHS
-        .iter()
-        .map(|w| Constraint::Length(*w))
-        .collect();
+    let mut constraints: Vec<Constraint> = cols.iter().map(|w| Constraint::Length(*w)).collect();
     constraints.push(Constraint::Min(1));
     let table = Table::new(rows, constraints)
         .column_spacing(AGENT_COL_SPACING)
