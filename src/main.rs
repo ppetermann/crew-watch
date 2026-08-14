@@ -1,6 +1,7 @@
 //! crew-watch entry point: argument parsing, terminal setup/teardown, and the
 //! render/tick event loop.
 
+mod agent_cols;
 mod app;
 mod cli;
 mod config;
@@ -232,11 +233,47 @@ fn resolve_fm_home(arg: Option<PathBuf>) -> PathBuf {
 /// TASK plus the separating spaces.
 const ONCE_TASK_PREFIX_WIDTH: usize = 69;
 
+/// Header line of the agent table in `--once` output. Column *alignment*
+/// mirrors the TUI table (src/ui.rs): numeric columns — PID, ELAPSED, CPU%,
+/// MEM — right-align so magnitudes stack; text columns stay left-aligned. The
+/// column widths are this surface's own: `--once` writes to a plain stream and
+/// never reflows, so they need not match the TUI's.
+fn once_agent_header() -> String {
+    format!(
+        "{:<10} {:<14} {:>7} {:>10} {:>9} {:>12}  TASK",
+        "RUNTIME", "MODEL", "PID", "ELAPSED", "CPU%", "MEM"
+    )
+}
+
+/// One agent row in `--once` output, in the column geometry of
+/// [`once_agent_header`] and sharing the TUI table's per-column alignment.
+fn once_agent_row(
+    kind: &str,
+    model: &str,
+    pid: i32,
+    elapsed_secs: u64,
+    cpu_percent: f64,
+    rss_kib: u64,
+    task: &str,
+) -> String {
+    use crate::format_util::{format_duration, format_kib, format_percent};
+    format!(
+        "{:<10} {:<14.14} {:>7} {:>10} {:>9} {:>12}  {}",
+        kind,
+        model,
+        pid,
+        format_duration(elapsed_secs),
+        format_percent(cpu_percent),
+        format_kib(rss_kib),
+        task
+    )
+}
+
 /// Non-interactive text dump of one snapshot (the `--once` path).
 fn print_once(app: &App) {
-    use crate::format_util::{format_duration, format_kib, format_percent, format_uptime};
+    use crate::format_util::{format_kib, format_uptime};
     use crate::procfs::CpuLine;
-    use crate::taskinfo::fit_task_line;
+    use crate::taskinfo::{compose_task_line, fit_task_line};
     use std::io::IsTerminal;
 
     let Some(snap) = app.snapshot() else {
@@ -269,15 +306,13 @@ fn print_once(app: &App) {
     if app.sessions.is_empty() {
         println!("agents: (none detected)");
     } else {
-        println!(
-            "{:<10} {:<14} {:>7} {:>10} {:>9} {:>12}  TASK",
-            "RUNTIME", "MODEL", "PID", "ELAPSED", "CPU%", "MEM"
-        );
+        println!("{}", once_agent_header());
         // On a real terminal, fit the TASK column to the remaining width (id
-        // dropped first, then ellipsis); when piped/redirected, print the full
-        // line so scripts always see the task id. crossterm's size() consults
-        // /dev/tty and would succeed even with stdout redirected, hence the
-        // explicit is_terminal gate.
+        // dropped first, then title shortens under the protected project
+        // prefix); when piped/redirected, print the full composed line —
+        // `project: title` for fleet rows — unfitted. crossterm's size()
+        // consults /dev/tty and would succeed even with stdout redirected,
+        // hence the explicit is_terminal gate.
         let task_width = if io::stdout().is_terminal() {
             crossterm::terminal::size()
                 .ok()
@@ -292,18 +327,20 @@ fn print_once(app: &App) {
                 s.model.clone()
             };
             let task = match task_width {
-                Some(w) => fit_task_line(&s.task, w),
-                None => s.task.clone(),
+                Some(w) => fit_task_line(s.task_project.as_deref(), &s.task, w),
+                None => compose_task_line(s.task_project.as_deref(), &s.task),
             };
             println!(
-                "{:<10} {:<14.14} {:>7} {:>10} {:>9} {:>12}  {}",
-                s.kind.display,
-                model,
-                s.pid,
-                format_duration(s.elapsed_secs),
-                format_percent(s.cpu_percent),
-                format_kib(s.rss_kib),
-                task
+                "{}",
+                once_agent_row(
+                    s.kind.display,
+                    &model,
+                    s.pid,
+                    s.elapsed_secs,
+                    s.cpu_percent,
+                    s.rss_kib,
+                    &task
+                )
             );
         }
     }
@@ -381,6 +418,71 @@ mod tests {
         assert_eq!(
             resolve_quota_interval(f64::INFINITY),
             Duration::from_secs(300)
+        );
+    }
+
+    /// Column just past the end of `needle` in `line` (its right edge).
+    fn right_edge(line: &str, needle: &str) -> usize {
+        line.find(needle).expect(needle) + needle.len()
+    }
+
+    #[test]
+    fn once_numeric_columns_right_align_so_magnitudes_stack() {
+        // The captain's example rows: same columns, different value widths.
+        // 827115 pid, 3:38:41 elapsed, 2.0% cpu, 722.0MiB rss (739328 KiB).
+        let short = once_agent_row(
+            "opencode",
+            "glm-5.3",
+            827_115,
+            3 * 3600 + 38 * 60 + 41,
+            2.0,
+            739_328,
+            "task one",
+        );
+        // 483889 pid, 38:23:40 elapsed, 31.8% cpu, 687.8MiB rss (704307 KiB).
+        let long = once_agent_row(
+            "claude",
+            "-",
+            483_889,
+            38 * 3600 + 23 * 60 + 40,
+            31.8,
+            704_307,
+            "task two",
+        );
+
+        // ELAPSED / CPU% / MEM: different widths, same right edge.
+        assert_eq!(right_edge(&short, "3:38:41"), right_edge(&long, "38:23:40"));
+        assert_eq!(right_edge(&short, "2.0%"), right_edge(&long, "31.8%"));
+        assert_eq!(
+            right_edge(&short, "722.0MiB"),
+            right_edge(&long, "687.8MiB")
+        );
+
+        // PID: an identifier, but right-aligned with the rest of the numeric
+        // block (the same convention as the TUI table; see src/ui.rs).
+        assert_eq!(right_edge(&short, "827115"), right_edge(&long, "483889"));
+
+        // Headers sit over the same right edges as their column's values.
+        let header = once_agent_header();
+        assert_eq!(right_edge(&header, "PID"), right_edge(&long, "483889"));
+        assert_eq!(
+            right_edge(&header, "ELAPSED"),
+            right_edge(&long, "38:23:40")
+        );
+        assert_eq!(right_edge(&header, "CPU%"), right_edge(&long, "31.8%"));
+        assert_eq!(right_edge(&header, "MEM"), right_edge(&long, "687.8MiB"));
+    }
+
+    #[test]
+    fn once_text_columns_stay_left_and_task_follows_the_fixed_prefix() {
+        let row = once_agent_row("claude", "-", 5463, 10_231, 0.0, 573_440, "interactive");
+        // RUNTIME at column 0, MODEL left-aligned in its own column.
+        assert!(row.starts_with("claude"));
+        assert!(row.starts_with("claude     -"));
+        // TASK begins right after the fixed prefix (the width-fit boundary).
+        assert_eq!(
+            row.char_indices().nth(ONCE_TASK_PREFIX_WIDTH).unwrap().1,
+            'i'
         );
     }
 }

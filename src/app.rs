@@ -94,7 +94,7 @@ impl App {
         let titles = &self.titles;
         for s in &mut sessions {
             if let Some(entry) = snap.procs.get(&s.pid) {
-                s.task = TaskInfo::resolve(
+                let resolved = TaskInfo::resolve(
                     records,
                     titles,
                     entry.cwd.as_deref(),
@@ -107,6 +107,8 @@ impl App {
                     &entry.cmdline,
                     s.kind,
                 );
+                s.task = resolved.line;
+                s.task_project = resolved.project;
                 s.model = resolve_model(&entry.cmdline).unwrap_or_default();
             }
         }
@@ -286,7 +288,7 @@ mod tests {
             kind("opencode"),
         );
         assert_eq!(
-            initial,
+            initial.line,
             "give each worker its own browser session [finished-task]"
         );
 
@@ -307,7 +309,7 @@ mod tests {
             kind("opencode"),
         );
         assert_eq!(
-            after, "scout the new fleet layout [fresh-scout]",
+            after.line, "scout the new fleet layout [fresh-scout]",
             "recycled worktree must show the new task, not the finished one"
         );
     }
@@ -347,8 +349,9 @@ mod tests {
             kind("opencode"),
         );
         assert!(
-            !line.contains("doomed-task"),
-            "fallen-through line must not carry the dead task id, got: {line}"
+            !line.line.contains("doomed-task"),
+            "fallen-through line must not carry the dead task id, got: {:?}",
+            line.line
         );
     }
 

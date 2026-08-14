@@ -146,6 +146,10 @@ pub struct Session {
     /// Resolved one-line "what is it working on" text (filled by the caller
     /// via [`crate::taskinfo`]).
     pub task: String,
+    /// Basename of the fleet record's `project=` path for fleet-matched
+    /// sessions, rendered as the task line's protected `project: ` prefix
+    /// (filled by the caller; `None` otherwise).
+    pub task_project: Option<String>,
     /// Compact display model parsed from argv (e.g. `glm-5.2`), or empty when
     /// no model flag was present (filled by the caller; rendered as `-`).
     pub model: String,
@@ -268,6 +272,7 @@ pub fn build_sessions(curr: &Snapshot, prev: Option<&Snapshot>) -> Vec<Session> 
             rss_kib: rss.get(&pid).copied().unwrap_or(0),
             elapsed_secs,
             task: String::new(),
+            task_project: None,
             model: String::new(),
         });
     }

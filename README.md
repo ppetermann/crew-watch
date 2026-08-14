@@ -65,13 +65,14 @@ to verify detection or to script a fleet check without a terminal:
 
 ```
 $ crew-watch --once
-cores=20 mem=4.4GiB/30.6GiB swap=0KiB/128.0GiB tasks=630 load=4.03 3.77 3.11 up=2:11:33
-RUNTIME    MODEL            PID    ELAPSED      CPU%          MEM  TASK
-opencode   glm-5.2       28404      36:34     97.0%     927.2MiB  crew-watch: add MODEL column ... [crew-watch-model-task-cols]
-claude     opus          14405      41:27     18.0%     516.1MiB  away mode unusable: resurface fires ... [fm-afk-resurface-loop]
-claude     -              5463     2:50:31      0.0%     560.0MiB  interactive @ firstmate
+cores=20 mem=12.8GiB/30.6GiB swap=2.7GiB/128.0GiB tasks=1092 load=1.63 1.70 1.87 up=3d 0:19:57
+RUNTIME    MODEL              PID    ELAPSED      CPU%          MEM  TASK
+opencode   glm-5.3        2097118      31:59     77.5%     848.6MiB  eve-members: public share link for a tenant's upcoming timers
+opencode   glm-5.3        2098092      31:32     75.5%       1.1GiB  crew-watch: right-align the ELAPSED, CPU% and MEM columns
+claude     -               483889   51:34:23      1.0%     594.2MiB  interactive @ firstmate
 ...
-quota claude   session 5% 1h45m  week 48% 3d22h  fable 45% 3d22h
+quota claude   session 12% 1h14m  week 53% 3d2h  fable 50% 3d2h
+quota zai      session 51% 2h40m  week 10% 16h4m  MCP month 0% 10d16h
 ```
 
 ## Layout
@@ -95,6 +96,16 @@ quota claude   session 5% 1h45m  week 48% 3d22h  fable 45% 3d22h
   normalized so one core = 100% (a multi-core subtree can exceed 100%, matching
   `htop`).
 - `TASK` — a one-line description of what the agent is working on (see below).
+
+Numeric columns (`PID`, `ELAPSED`, `CPU%`, `MEM`) are right-aligned so
+magnitudes stack and rows compare at a glance; text columns (`RUNTIME`,
+`MODEL`, `TASK`) are left-aligned. The TUI table and `--once` follow the
+same rule.
+
+On a terminal too narrow for the full table the TUI shrinks the fixed columns
+and the values shorten by unit and precision first (`848.6MiB` → `849MiB` →
+`849M`, `38:23:40` → `38:23` → `38h`), never by losing their leading digits —
+so a magnitude is never misread. Nothing wraps or overflows at any width.
 
 Rows are sorted by aggregated CPU% descending. If no agent runtime is running,
 the panel shows an empty-state hint instead of going blank.
@@ -143,13 +154,18 @@ wins.
    home (env `CREW_WATCH_FM_HOME`, or default `~/agents/firstmate`) contains
    `state/*.meta` files, each records `worktree=`, `project=`,
    `endpoint_task_id=`, etc. `crew-watch` matches an agent process to a record
-   via its cwd (the worktree path). When the task id resolves to a human title
-   from `data/backlog.md` (or, as a fallback, the first sentence of
-   `data/<task-id>/brief.md`), the column shows that title with the task id in
-   brackets, e.g. `away mode unusable: resurface fires ... [fm-afk-resurface-loop]`.
-   If no title is found, the task id is shown on its own. This is read-only and
-   best-effort: a missing/unparseable home, record, backlog, or brief never
-   fails.
+   via its cwd (the worktree path). The task line is prefixed with the
+   **basename of the record's `project=` path** so the project is explicit,
+   e.g. `crew-watch: right-align the ELAPSED, CPU% and MEM columns`. Under
+   width pressure the title is what shortens; the project prefix survives
+   (and only ellipsizes itself when the column cannot even hold it). With a
+   project known, the old bracketed task-id suffix is dropped — it only ever
+   carried the project, inferable from ids that happened to start with it; a
+   record without `project=` degrades to the older
+   `title [task-id]` form so the id still serves as reference. If no title is
+   found at all, the task id is shown (prefixed by the project when known).
+   This is read-only and best-effort: a missing/unparseable home, record,
+   backlog, or brief never fails.
 
    Records and titles are re-read on **every refresh**, not once at launch, so a
    long-running `crew-watch` follows task lifecycle: a task started after launch
