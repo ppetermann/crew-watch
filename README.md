@@ -65,13 +65,13 @@ to verify detection or to script a fleet check without a terminal:
 
 ```
 $ crew-watch --once
-cores=20 mem=4.4GiB/30.6GiB swap=0KiB/128.0GiB tasks=630 load=4.03 3.77 3.11 up=2:11:33
-RUNTIME    MODEL            PID    ELAPSED      CPU%          MEM  TASK
-opencode   glm-5.2       28404      36:34     97.0%     927.2MiB  crew-watch: add MODEL column ... [crew-watch-model-task-cols]
-claude     opus          14405      41:27     18.0%     516.1MiB  away mode unusable: resurface fires ... [fm-afk-resurface-loop]
-claude     -              5463     2:50:31      0.0%     560.0MiB  interactive @ firstmate
-...
-quota claude   session 5% 1h45m  week 48% 3d22h  fable 45% 3d22h
+cores=20 mem=13.5GiB/30.6GiB swap=2.7GiB/128.0GiB tasks=1404 load=3.10 2.59 1.95 up=3d 0:03:01
+RUNTIME    MODEL              PID    ELAPSED      CPU%          MEM  TASK
+opencode   glm-5.3        2098092      14:35    118.5%     995.0MiB  right-align the ELAPSED, CPU% and MEM columns [crewwatch-numeric-column-align]
+opencode   glm-5.3        2097118      15:02    118.5%       1.0GiB  public share link for a tenant's upcoming timers [evemembers-public-timer-share]
+claude     -               483889   51:17:27      1.0%     592.3MiB  interactive @ firstmate
+quota claude   session 11% 1h31m  week 53% 3d2h  fable 50% 3d2h
+quota zai      session 41% 2h57m  week 8% 16h21m  MCP month 0% 10d16h
 ```
 
 ## Layout
@@ -95,6 +95,11 @@ quota claude   session 5% 1h45m  week 48% 3d22h  fable 45% 3d22h
   normalized so one core = 100% (a multi-core subtree can exceed 100%, matching
   `htop`).
 - `TASK` — a one-line description of what the agent is working on (see below).
+
+Numeric columns (`PID`, `ELAPSED`, `CPU%`, `MEM`) are right-aligned so
+magnitudes stack and rows compare at a glance; text columns (`RUNTIME`,
+`MODEL`, `TASK`) are left-aligned. The TUI table and `--once` follow the
+same rule.
 
 Rows are sorted by aggregated CPU% descending. If no agent runtime is running,
 the panel shows an empty-state hint instead of going blank.
