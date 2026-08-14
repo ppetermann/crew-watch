@@ -21,7 +21,6 @@ use crate::procfs::{CpuLine, Snapshot};
 use crate::quota::{has_usage_windows, ProviderQuota};
 use crate::quota_row::build_quota_rows;
 use crate::taskinfo::fit_task_line;
-
 const MIN_CELL_WIDTH: usize = 18;
 const MAX_COLS: usize = 8;
 const MEM_BAR_WIDTH: usize = 20;
@@ -310,7 +309,11 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
             right_cell(format_percent(s.cpu_percent))
                 .style(Style::default().fg(pct_color(s.cpu_percent))),
             right_cell(format_kib(s.rss_kib)),
-            Cell::from(fit_task_line(&s.task, task_width)),
+            Cell::from(fit_task_line(
+                s.task_project.as_deref(),
+                &s.task,
+                task_width,
+            )),
         ])
     });
 

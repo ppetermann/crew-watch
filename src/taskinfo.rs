@@ -2,10 +2,14 @@
 //!
 //! Sources are consulted in order; the first to answer wins:
 //! 1. **Firstmate fleet records** ([`crate::meta`]), matched by the agent's cwd.
-//!    When the task id resolves to a human title from [`crate::titles`], the
-//!    column reads like a sentence: `fix away-mode resurface flood
-//!    [fm-afk-resurface-loop]`. The title is shown first, the task id in
-//!    brackets as a secondary reference.
+//!    The task line is prefixed with the project so the captain can see at a
+//!    glance which project a worker is on: when the record carries `project=`,
+//!    its basename prefixes the line (`crew-watch: right-align the numeric
+//!    columns`). The project comes from the record, not the task id — ids only
+//!    *happen* to start with the project name. With a project known, the
+//!    bracketed task-id suffix is dropped (it only ever carried the project);
+//!    a record without `project=` degrades to the older `title [task-id]`
+//!    form so the id still serves as secondary reference.
 //! 2. **Unmatched with a cwd**: the project name (git repo name via
 //!    [`crate::project`], else the cwd basename), labelled
 //!    `interactive @ <project>` when no prompt arg is detected (an interactive
@@ -13,6 +17,13 @@
 //!    never shown alone.
 //! 3. **No cwd at all**: a trimmed positional argv excerpt, else the runtime
 //!    name.
+//!
+//! The project prefix travels as data ([`ResolvedTask::project`]), separate
+//! from the title text: titles themselves may contain `": "` (e.g. `away mode
+//! unusable: resurface fires`), so the prefix cannot be recovered by parsing
+//! the composed line. Renderers compose and width-fit through
+//! [`compose_task_line`] / [`fit_task_line`], which guarantee that under
+//! truncation **the project survives while the title is what shortens**.
 //!
 //! The layering mirrors the detection table: to support a new fleet format,
 //! prepend another lookup step at the top of [`TaskInfo::resolve`].
@@ -41,6 +52,19 @@ use crate::titles::TaskTitles;
 /// A one-line description of an agent's current work.
 pub struct TaskInfo;
 
+/// Result of [`TaskInfo::resolve`]: the task text plus, for fleet-matched
+/// sessions, the project basename to render as its protected prefix.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ResolvedTask {
+    /// The task line without its project prefix (title, degraded
+    /// `title [task-id]`, task id, `interactive @ <project>`, argv excerpt,
+    /// or runtime name).
+    pub line: String,
+    /// Basename of the fleet record's `project=` path; `None` for non-fleet
+    /// or project-less rows (their line already stands alone).
+    pub project: Option<String>,
+}
+
 /// Title is capped so the TASK column stays readable even when the backlog
 /// entry is a multi-sentence paragraph. Width-aware fitting to the actual
 /// column happens at render time via [`fit_task_line`].
@@ -65,11 +89,11 @@ impl TaskInfo {
         project_name: impl FnOnce() -> Option<String>,
         cmdline: &[String],
         kind: &AgentKind,
-    ) -> String {
+    ) -> ResolvedTask {
         // Layer 1: firstmate fleet records, matched by worktree == cwd.
         if let Some(cwd) = cwd {
             if let Some(rec) = find_by_cwd(records, cwd) {
-                return fleet_task_line(rec, titles);
+                return fleet_task_parts(rec, titles);
             }
         }
 
@@ -79,38 +103,93 @@ impl TaskInfo {
                 .map(|s| s.to_string_lossy().into_owned())
         });
         if let Some(project) = project {
-            if has_prompt_arg(cmdline) {
+            let line = if has_prompt_arg(cmdline) {
                 // Autonomous session whose task we could not identify: show
                 // where it is working without the misleading "interactive".
-                return project;
-            }
-            return format!("interactive @ {}", project);
+                project.clone()
+            } else {
+                format!("interactive @ {}", project)
+            };
+            return ResolvedTask {
+                line,
+                project: None,
+            };
         }
 
         // Layer 3: no cwd — positional argv excerpt, else the runtime name.
-        if let Some(excerpt) = positional_argv_excerpt(cmdline) {
-            return excerpt;
+        let line = positional_argv_excerpt(cmdline).unwrap_or_else(|| kind.display.to_string());
+        ResolvedTask {
+            line,
+            project: None,
         }
-        kind.display.to_string()
     }
 }
 
-/// Build the task line for a fleet-matched agent: `<title> [<task_id>]` when a
-/// human title is known, else just the task id.
-fn fleet_task_line(rec: &TaskRecord, titles: &TaskTitles) -> String {
-    match titles.title_for(&rec.task_id) {
+/// Split a fleet-matched record into its renderable parts: the task text and
+/// the project-basename prefix. With a project known, the task id is not
+/// appended to a found title (the project prefix replaces its role); without
+/// one, the older `title [task-id]` form keeps the id as secondary reference.
+fn fleet_task_parts(rec: &TaskRecord, titles: &TaskTitles) -> ResolvedTask {
+    let project = project_basename(rec.project.as_deref());
+    let line = match titles.title_for(&rec.task_id) {
         Some(title) => {
             let title = truncate_with_ellipsis(title.trim(), TITLE_DISPLAY_MAX);
-            format!("{} [{}]", title, rec.task_id)
+            match project.as_deref() {
+                Some(_) => title,
+                None => format!("{} [{}]", title, rec.task_id),
+            }
         }
         None => rec.task_id.clone(),
+    };
+    ResolvedTask { line, project }
+}
+
+/// Basename of a fleet record's `project=` path (`…/projects/crew-watch` →
+/// `crew-watch`). `None` when absent, empty, or not a path with a final
+/// component (so the row simply renders unprefixed).
+fn project_basename(project: Option<&str>) -> Option<String> {
+    let p = project?;
+    let name = Path::new(p).file_name()?.to_string_lossy().into_owned();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
     }
 }
 
-/// Fit a task line into `width` display columns. The full `title [task-id]`
+/// Compose the full, unfitted task line: `<project>: <line>` for fleet rows
+/// with a project, the line as-is otherwise.
+pub fn compose_task_line(project: Option<&str>, line: &str) -> String {
+    match project.filter(|p| !p.is_empty()) {
+        Some(p) => format!("{}: {}", p, line),
+        None => line.to_string(),
+    }
+}
+
+/// Fit a task line into `width` display columns, with the project prefix
+/// protected: when space is tight the task text is what shortens (bracketed
+/// id dropped first, then ellipsis), and only when the width cannot even hold
+/// the project does the project itself ellipsize. Lines without a project
+/// keep the historical fitting: full line when it fits, id dropped, then
+/// ellipsis.
+pub fn fit_task_line(project: Option<&str>, line: &str, width: usize) -> String {
+    let Some(p) = project.filter(|p| !p.is_empty()) else {
+        return fit_plain(line, width);
+    };
+    let prefix_len = p.chars().count() + 2; // "project: "
+    if line.chars().count() + prefix_len <= width {
+        return compose_task_line(Some(p), line);
+    }
+    if width > prefix_len {
+        return format!("{}: {}", p, fit_plain(line, width - prefix_len));
+    }
+    truncate_with_ellipsis(p, width)
+}
+
+/// Historical fitting for an unprefixed task line: the full `title [task-id]`
 /// line is kept when it fits; when space is tight the bracketed id is dropped
 /// first, and only then is the remaining title ellipsized to the width.
-pub fn fit_task_line(line: &str, width: usize) -> String {
+fn fit_plain(line: &str, width: usize) -> String {
     if line.chars().count() <= width {
         return line.to_string();
     }
@@ -234,7 +313,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
     // --- Layer 1: fleet-matched ---
 
     #[test]
-    fn fleet_matched_shows_title_with_id() {
+    fn fleet_matched_resolves_title_and_project_prefix() {
         let recs = vec![parse_meta(SAMPLE_META)];
         let titles = titles_from_backlog(SAMPLE_BACKLOG);
         let cwd = PathBuf::from("/home/crew/wt/firstmate");
@@ -243,7 +322,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             "--model".to_string(),
             "zai-coding-plan/glm-5.2".to_string(),
         ];
-        let line = TaskInfo::resolve(
+        let resolved = TaskInfo::resolve(
             &recs,
             &titles,
             Some(&cwd),
@@ -251,9 +330,13 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &cmdline,
             kind("opencode"),
         );
+        // Project from the record's `project=` basename; no id suffix (the
+        // prefix replaces its role).
+        assert_eq!(resolved.project.as_deref(), Some("firstmate"));
+        assert_eq!(resolved.line, "away mode unusable: resurface fires ~1/sec");
         assert_eq!(
-            line,
-            "away mode unusable: resurface fires ~1/sec [fm-afk-resurface-loop]"
+            compose_task_line(resolved.project.as_deref(), &resolved.line),
+            "firstmate: away mode unusable: resurface fires ~1/sec"
         );
     }
 
@@ -262,8 +345,14 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
         let recs = vec![parse_meta(SAMPLE_META)];
         let titles = TaskTitles::default();
         let cwd = PathBuf::from("/home/crew/wt/firstmate");
-        let line = TaskInfo::resolve(&recs, &titles, Some(&cwd), || None, &[], kind("opencode"));
-        assert_eq!(line, "fm-afk-resurface-loop");
+        let resolved =
+            TaskInfo::resolve(&recs, &titles, Some(&cwd), || None, &[], kind("opencode"));
+        assert_eq!(resolved.line, "fm-afk-resurface-loop");
+        assert_eq!(resolved.project.as_deref(), Some("firstmate"));
+        assert_eq!(
+            compose_task_line(resolved.project.as_deref(), &resolved.line),
+            "firstmate: fm-afk-resurface-loop"
+        );
     }
 
     #[test]
@@ -275,12 +364,49 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
         );
         let titles = titles_from_backlog(&long_title);
         let cwd = PathBuf::from("/home/crew/wt/firstmate");
-        let line = TaskInfo::resolve(&recs, &titles, Some(&cwd), || None, &[], kind("opencode"));
-        // Title capped to 80 chars (77 + "..."), then id in brackets.
-        let title_part = line.split(" [").next().unwrap();
-        assert_eq!(title_part.chars().count(), 80);
-        assert!(title_part.ends_with("..."));
-        assert!(line.ends_with("[fm-afk-resurface-loop]"));
+        let resolved =
+            TaskInfo::resolve(&recs, &titles, Some(&cwd), || None, &[], kind("opencode"));
+        // Title capped to 80 chars (77 + "..."); no id suffix to strip.
+        assert_eq!(resolved.line.chars().count(), 80);
+        assert!(resolved.line.ends_with("..."));
+        assert!(!resolved.line.contains('['));
+    }
+
+    #[test]
+    fn fleet_record_without_project_keeps_id_suffix() {
+        // Degrade: a record lacking `project=` renders the older
+        // `title [task-id]` form so the id still carries its reference role.
+        let meta = "endpoint_task_id=fm-afk-resurface-loop\nworktree=/home/crew/wt/firstmate\n";
+        let recs = vec![parse_meta(meta)];
+        let titles = titles_from_backlog(SAMPLE_BACKLOG);
+        let cwd = PathBuf::from("/home/crew/wt/firstmate");
+        let resolved =
+            TaskInfo::resolve(&recs, &titles, Some(&cwd), || None, &[], kind("opencode"));
+        assert_eq!(resolved.project, None);
+        assert_eq!(
+            resolved.line,
+            "away mode unusable: resurface fires ~1/sec [fm-afk-resurface-loop]"
+        );
+    }
+
+    #[test]
+    fn project_basename_handles_nested_paths_and_trailing_slashes() {
+        assert_eq!(
+            project_basename(Some("/home/crew/agents/firstmate/projects/crew-watch")),
+            Some("crew-watch".to_string())
+        );
+        assert_eq!(
+            project_basename(Some("/home/crew/agents/firstmate/projects/crew-watch/")),
+            Some("crew-watch".to_string())
+        );
+        assert_eq!(
+            project_basename(Some("crew-watch")),
+            Some("crew-watch".to_string())
+        );
+        assert_eq!(project_basename(Some("")), None);
+        assert_eq!(project_basename(Some("/")), None);
+        assert_eq!(project_basename(Some(".")), None);
+        assert_eq!(project_basename(None), None);
     }
 
     // --- Layer 2: unmatched with cwd ---
@@ -301,7 +427,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &cmdline,
             kind("claude"),
         );
-        assert_eq!(line, "interactive @ firstmate");
+        assert_eq!(line.line, "interactive @ firstmate");
     }
 
     #[test]
@@ -315,7 +441,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &["claude".to_string()],
             kind("claude"),
         );
-        assert_eq!(line, "interactive @ firstmate");
+        assert_eq!(line.line, "interactive @ firstmate");
     }
 
     #[test]
@@ -331,7 +457,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &["claude".to_string()],
             kind("claude"),
         );
-        assert_eq!(line, "interactive @ firstmate");
+        assert_eq!(line.line, "interactive @ firstmate");
     }
 
     #[test]
@@ -353,7 +479,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &cmdline,
             kind("opencode"),
         );
-        assert_eq!(line, "crew-watch");
+        assert_eq!(line.line, "crew-watch");
     }
 
     #[test]
@@ -371,7 +497,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
                 &cmdline,
                 kind("claude"),
             );
-            assert_eq!(line, "crew-watch");
+            assert_eq!(line.line, "crew-watch");
         }
     }
 
@@ -397,7 +523,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &cmdline,
             kind("opencode"),
         );
-        assert_eq!(line, "firstmate");
+        assert_eq!(line.line, "firstmate");
     }
 
     #[test]
@@ -418,7 +544,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &cmdline,
             kind("claude"),
         );
-        assert_eq!(line, "proj");
+        assert_eq!(line.line, "proj");
     }
 
     // --- Layer 3: no cwd ---
@@ -434,7 +560,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &cmdline,
             kind("claude"),
         );
-        assert_eq!(line, "fix the bug");
+        assert_eq!(line.line, "fix the bug");
     }
 
     #[test]
@@ -457,7 +583,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             kind("opencode"),
         );
         // Only positional, non-huge tokens survive: "do thing".
-        assert_eq!(line, "do thing");
+        assert_eq!(line.line, "do thing");
     }
 
     #[test]
@@ -475,7 +601,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &cmdline,
             kind("claude"),
         );
-        assert_eq!(line, "claude");
+        assert_eq!(line.line, "claude");
     }
 
     #[test]
@@ -488,7 +614,7 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
             &[],
             kind("claude"),
         );
-        assert_eq!(line, "claude");
+        assert_eq!(line.line, "claude");
     }
 
     // --- fit_task_line ---
@@ -496,33 +622,116 @@ project=/home/crew/agents/firstmate/projects/firstmate\nharness=opencode\n";
     #[test]
     fn fit_full_line_kept_when_it_fits() {
         let line = "fix flood [fm-afk-resurface-loop]";
-        assert_eq!(fit_task_line(line, 40), line);
-        assert_eq!(fit_task_line(line, line.chars().count()), line);
+        assert_eq!(fit_task_line(None, line, 40), line);
+        assert_eq!(fit_task_line(None, line, line.chars().count()), line);
     }
 
     #[test]
     fn fit_drops_id_first_when_tight() {
         let line = "fix away-mode resurface flood [fm-afk-resurface-loop]";
-        assert_eq!(fit_task_line(line, 30), "fix away-mode resurface flood");
+        assert_eq!(
+            fit_task_line(None, line, 30),
+            "fix away-mode resurface flood"
+        );
     }
 
     #[test]
     fn fit_ellipsizes_title_when_even_title_is_too_wide() {
         let line = "fix away-mode resurface flood [fm-afk-resurface-loop]";
-        assert_eq!(fit_task_line(line, 10), "fix awa...");
+        assert_eq!(fit_task_line(None, line, 10), "fix awa...");
     }
 
     #[test]
     fn fit_line_without_id_suffix_gets_ellipsis() {
-        assert_eq!(fit_task_line("interactive @ firstmate", 12), "interacti...");
+        assert_eq!(
+            fit_task_line(None, "interactive @ firstmate", 12),
+            "interacti..."
+        );
     }
 
     #[test]
     fn fit_multibyte_title_is_char_boundary_safe() {
         let line = format!("{} [task-x]", "ä".repeat(30));
-        let fitted = fit_task_line(&line, 10);
+        let fitted = fit_task_line(None, &line, 10);
         assert_eq!(fitted.chars().count(), 10);
         assert!(fitted.ends_with("..."));
+    }
+
+    // --- fit_task_line with a protected project prefix ---
+
+    const PROJECT: &str = "crew-watch";
+    const TITLE: &str = "right-align the ELAPSED, CPU% and MEM columns";
+    const FULL: usize = PROJECT.len() + 2 + TITLE.len(); // "crew-watch: " + title
+
+    #[test]
+    fn fit_project_line_kept_whole_when_it_fits() {
+        assert_eq!(
+            fit_task_line(Some(PROJECT), TITLE, FULL),
+            "crew-watch: right-align the ELAPSED, CPU% and MEM columns"
+        );
+        // One column to spare keeps it too.
+        assert_eq!(fit_task_line(Some(PROJECT), TITLE, FULL + 1).len(), FULL);
+    }
+
+    #[test]
+    fn fit_project_survives_while_title_shortens() {
+        // A width that cannot hold the whole line still holds the full
+        // project frame; the title ellipsizes inside it.
+        let fitted = fit_task_line(Some(PROJECT), TITLE, FULL - 10);
+        assert!(fitted.starts_with("crew-watch: "));
+        assert!(fitted.ends_with("..."));
+        assert_eq!(fitted.chars().count(), FULL - 10);
+        // Tighter still: more title goes, the prefix never does.
+        let tighter = fit_task_line(Some(PROJECT), TITLE, PROJECT.len() + 2 + 8);
+        assert_eq!(tighter, "crew-watch: right...");
+    }
+
+    #[test]
+    fn fit_project_line_shortens_title_id_drop_first() {
+        // Defensive: even if a line still carries an id suffix (the degraded,
+        // project-less resolve form), the fitter drops it before ellipsizing,
+        // inside the protected project frame.
+        let line = "fix away-mode resurface flood [fm-afk-resurface-loop]";
+        // "firstmate: " (11) + "fix away-mode resurface flood" (29) = 40.
+        assert_eq!(
+            fit_task_line(Some("firstmate"), line, 40),
+            "firstmate: fix away-mode resurface flood"
+        );
+    }
+
+    #[test]
+    fn fit_project_itself_ellipsizes_only_when_width_cannot_hold_it() {
+        // Width below "project: " + one title char: the project is what the
+        // captain wants to read, so it is the last thing to shorten — and it
+        // never overflows.
+        assert_eq!(fit_task_line(Some(PROJECT), TITLE, 8), "crew-...");
+        assert_eq!(fit_task_line(Some(PROJECT), TITLE, PROJECT.len()), PROJECT);
+        // Exactly the prefix width: no room for a title char, project stays.
+        assert_eq!(
+            fit_task_line(Some(PROJECT), TITLE, PROJECT.len() + 2),
+            PROJECT
+        );
+        // One char of budget left: prefix plus a single title character.
+        assert_eq!(
+            fit_task_line(Some(PROJECT), TITLE, PROJECT.len() + 3),
+            "crew-watch: r"
+        );
+    }
+
+    #[test]
+    fn fit_project_multibyte_is_char_boundary_safe() {
+        let title = "ä".repeat(30);
+        let fitted = fit_task_line(Some("flotte"), &title, 12);
+        assert!(fitted.starts_with("flotte: "));
+        assert_eq!(fitted.chars().count(), 12);
+        assert!(fitted.ends_with("..."));
+    }
+
+    #[test]
+    fn fit_empty_project_falls_back_to_plain_fitting() {
+        let line = "fix flood [fm-afk-resurface-loop]";
+        assert_eq!(fit_task_line(Some(""), line, 40), line);
+        assert_eq!(fit_task_line(None, line, 30), "fix flood".to_string());
     }
 
     // --- truncate_with_ellipsis ---

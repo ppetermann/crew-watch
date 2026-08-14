@@ -270,7 +270,7 @@ fn once_agent_row(
 fn print_once(app: &App) {
     use crate::format_util::{format_kib, format_uptime};
     use crate::procfs::CpuLine;
-    use crate::taskinfo::fit_task_line;
+    use crate::taskinfo::{compose_task_line, fit_task_line};
     use std::io::IsTerminal;
 
     let Some(snap) = app.snapshot() else {
@@ -305,10 +305,11 @@ fn print_once(app: &App) {
     } else {
         println!("{}", once_agent_header());
         // On a real terminal, fit the TASK column to the remaining width (id
-        // dropped first, then ellipsis); when piped/redirected, print the full
-        // line so scripts always see the task id. crossterm's size() consults
-        // /dev/tty and would succeed even with stdout redirected, hence the
-        // explicit is_terminal gate.
+        // dropped first, then title shortens under the protected project
+        // prefix); when piped/redirected, print the full composed line —
+        // `project: title` for fleet rows — unfitted. crossterm's size()
+        // consults /dev/tty and would succeed even with stdout redirected,
+        // hence the explicit is_terminal gate.
         let task_width = if io::stdout().is_terminal() {
             crossterm::terminal::size()
                 .ok()
@@ -323,8 +324,8 @@ fn print_once(app: &App) {
                 s.model.clone()
             };
             let task = match task_width {
-                Some(w) => fit_task_line(&s.task, w),
-                None => s.task.clone(),
+                Some(w) => fit_task_line(s.task_project.as_deref(), &s.task, w),
+                None => compose_task_line(s.task_project.as_deref(), &s.task),
             };
             println!(
                 "{}",
