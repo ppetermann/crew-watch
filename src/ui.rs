@@ -6,9 +6,9 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
@@ -28,6 +28,18 @@ const MEM_BAR_WIDTH: usize = 20;
 /// Fixed widths of every agent-table column before the flexible TASK column.
 const AGENT_FIXED_COL_WIDTHS: [u16; 6] = [10, 14, 8, 10, 9, 12];
 const AGENT_COL_SPACING: u16 = 1;
+
+/// Right-aligned cell for the agent table's numeric columns (PID, ELAPSED,
+/// CPU%, MEM): their magnitudes stack on the right edge so rows compare at a
+/// glance. PID joins them — like htop and `ps`, and matching `--once` — even
+/// though it is an identifier, not a magnitude; digits read as one numeric
+/// block. Text columns (RUNTIME, MODEL, TASK) stay left-aligned, and
+/// `--once` formats the same columns right-aligned, so the two surfaces stay
+/// consistent. Over-width content truncates (alignment ignored), exactly as
+/// the left-aligned cells always have.
+fn right_cell(text: String) -> Cell<'static> {
+    Cell::from(Text::from(text).alignment(Alignment::Right))
+}
 
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
@@ -271,10 +283,10 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
     let header = Row::new(vec![
         Cell::from("RUNTIME"),
         Cell::from("MODEL"),
-        Cell::from("PID"),
-        Cell::from("ELAPSED"),
-        Cell::from("CPU%"),
-        Cell::from("MEM"),
+        right_cell("PID".to_string()),
+        right_cell("ELAPSED".to_string()),
+        right_cell("CPU%".to_string()),
+        right_cell("MEM".to_string()),
         Cell::from("TASK"),
     ])
     .style(Style::default().add_modifier(Modifier::BOLD));
@@ -293,11 +305,11 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
             } else {
                 s.model.clone()
             }),
-            Cell::from(s.pid.to_string()),
-            Cell::from(format_duration(s.elapsed_secs)),
-            Cell::from(format_percent(s.cpu_percent))
+            right_cell(s.pid.to_string()),
+            right_cell(format_duration(s.elapsed_secs)),
+            right_cell(format_percent(s.cpu_percent))
                 .style(Style::default().fg(pct_color(s.cpu_percent))),
-            Cell::from(format_kib(s.rss_kib)),
+            right_cell(format_kib(s.rss_kib)),
             Cell::from(fit_task_line(&s.task, task_width)),
         ])
     });
