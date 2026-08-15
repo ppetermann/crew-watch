@@ -32,9 +32,9 @@ const MEM_BAR_WIDTH: usize = 20;
 /// CPU%, MEM): their magnitudes stack on the right edge so rows compare at a
 /// glance. PID joins them — like htop and `ps`, and matching `--once` — even
 /// though it is an identifier, not a magnitude; digits read as one numeric
-/// block. Text columns (RUNTIME, MODEL, TASK) stay left-aligned, and `--once`
-/// aligns the same columns the same way, so the two surfaces read alike (the
-/// column *widths* differ by design; only alignment is shared).
+/// block. Text columns (STATE, RUNTIME, MODEL, TASK) stay left-aligned, and
+/// `--once` aligns the same columns the same way, so the two surfaces read
+/// alike (the column *widths* differ by design; only alignment is shared).
 ///
 /// Callers must pass content already fitted to the column's width via the
 /// [`crate::agent_cols`] helpers: ratatui truncates an over-width

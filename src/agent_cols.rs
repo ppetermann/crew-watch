@@ -42,7 +42,7 @@ fn spacing_total() -> u16 {
     AGENT_COL_SPACING * (AGENT_FIXED_COL_WIDTHS.len() as u16)
 }
 
-/// Widths the six fixed columns get inside a table of `area_width` outer
+/// Widths the seven fixed columns get inside a table of `area_width` outer
 /// columns (borders included).
 ///
 /// Returns [`AGENT_FIXED_COL_WIDTHS`] unchanged whenever they fit alongside

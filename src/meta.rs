@@ -1,6 +1,6 @@
 //! Firstmate fleet-record parsing.
 //!
-//! Firstmate writes one `state/<task-id>.meta` file per task, containing
+//! Firstmate writes one `state/<stem>.meta` file per task, containing
 //! `key=value` lines (`worktree=`, `project=`, `endpoint_task_id=`,
 //! `harness=`, `window=`, ...). crew-watch matches an agent process to a
 //! record by its cwd (the worktree path).

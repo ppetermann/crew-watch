@@ -66,10 +66,10 @@ to verify detection or to script a fleet check without a terminal:
 ```
 $ crew-watch --once
 cores=20 mem=12.8GiB/30.6GiB swap=2.7GiB/128.0GiB tasks=1092 load=1.63 1.70 1.87 up=3d 0:19:57
-STATE    RUNTIME    MODEL              PID    ELAPSED      CPU%          MEM  TASK
-busy     opencode   glm-5.3        2097118      31:59     77.5%     848.6MiB  eve-members: public share link for a tenant's upcoming timers
-wait     opencode   glm-5.3        2098092      31:32     75.5%       1.1GiB  crew-watch: right-align the ELAPSED, CPU% and MEM columns
-human    claude     -               483889   51:34:23      1.0%     594.2MiB  interactive @ firstmate
+STATE   RUNTIME    MODEL              PID    ELAPSED      CPU%          MEM  TASK
+busy    opencode   glm-5.3        2097118      31:59     77.5%     848.6MiB  eve-members: public share link for a tenant's upcoming timers
+wait    opencode   glm-5.3        2098092      31:32     75.5%       1.1GiB  crew-watch: right-align the ELAPSED, CPU% and MEM columns
+human   claude     -               483889   51:34:23      1.0%     594.2MiB  interactive @ firstmate
 ...
 quota claude   session 12% 1h14m  week 53% 3d2h  fable 50% 3d2h
 quota zai      session 51% 2h40m  week 10% 16h4m  MCP month 0% 10d16h
@@ -86,8 +86,9 @@ quota zai      session 51% 2h40m  week 10% 16h4m  MCP month 0% 10d16h
 
 **Bottom — agent list, one row per running agent session:**
 
-- `STATE` — what the agent is doing right now, as one emoji in the TUI (a
-  plain word in `--once`); see the table below.
+- `STATE` — what the agent is doing right now, as one emoji in the TUI (whose
+  header is a bare `S`, so the column costs two cells) and a plain word in
+  `--once`; see the table below.
 - `RUNTIME` — which agent runtime it is (`claude`, `opencode`, ...).
 - `MODEL` — the model the agent is running, parsed from its `--model` argv flag
   with the provider prefix stripped for compactness
@@ -298,8 +299,9 @@ request.
 
 The pure logic — `/proc` parsing, agent detection, subtree aggregation, meta
 parsing, model extraction, title lookup, project-name resolution, task
-resolution, quota parsing/row-building/dialog, and config — is unit-tested with
-fixture data. The TUI rendering itself is not unit-tested in v1.
+resolution, activity classification, quota parsing/row-building/dialog, and
+config — is unit-tested with fixture data. The TUI rendering itself is not
+unit-tested in v1.
 
 ## License
 

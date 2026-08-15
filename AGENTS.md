@@ -20,7 +20,7 @@ the full user-facing spec (install, usage, detection table, firstmate records).
 ### Build / test / lint (authoritative commands)
 
 - `cargo build --release` — binary at `target/release/crew-watch`.
-- `cargo test` — unit tests for the pure logic (parsing, detection, aggregation, meta, taskinfo, quota). TUI rendering is intentionally untested in v1.
+- `cargo test` — unit tests for the pure logic (parsing, detection, aggregation, meta, taskinfo, activity, quota). TUI rendering is intentionally untested in v1.
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` must stay clean (CI gates on them).
 - `crew-watch --once` — non-interactive one-shot dump; the way to verify detection/CPU/mem outside a TTY.
 
