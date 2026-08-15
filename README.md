@@ -129,6 +129,9 @@ On a narrow terminal the emoji column compresses to one cell and falls back
 to single-character ASCII forms (`*`, `z`, `w`, `?`, `!`, `~`, `+`, `x`,
 `@`, `.`).
 
+The authoritative glyph, ASCII and word tables live in `src/activity.rs`
+(`glyph()`, `ascii()`, `once_label()`).
+
 On a terminal too narrow for the full table the TUI shrinks the fixed columns
 and the values shorten by unit and precision first (`848.6MiB` → `849MiB` →
 `849M`, `38:23:40` → `38:23` → `38h`), never by losing their leading digits —
