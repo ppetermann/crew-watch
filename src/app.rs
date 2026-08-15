@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+use crate::activity::{load_activity, Activity};
 use crate::detect::{build_sessions, Session};
 use crate::meta::{load_fm_home, TaskRecord};
 use crate::model::resolve_model;
@@ -110,6 +111,19 @@ impl App {
                 s.task = resolved.line;
                 s.task_project = resolved.project;
                 s.model = resolve_model(&entry.cmdline).unwrap_or_default();
+                // STATE column: fleet-matched rows classify from the task's
+                // firstmate status/busy-state files (keyed by the record's
+                // filename stem); non-fleet rows only know interactive vs
+                // unknown.
+                let rec = entry
+                    .cwd
+                    .as_deref()
+                    .and_then(|c| crate::meta::find_by_cwd(records, c));
+                s.activity = match rec {
+                    Some(r) => load_activity(&self.fm_home, &r.stem),
+                    None if resolved.interactive => Activity::Interactive,
+                    None => Activity::Unknown,
+                };
             }
         }
         self.prev = self.curr.take();

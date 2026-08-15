@@ -63,6 +63,10 @@ pub struct ResolvedTask {
     /// Basename of the fleet record's `project=` path; `None` for non-fleet
     /// or project-less rows (their line already stands alone).
     pub project: Option<String>,
+    /// True only for the layer-2 `interactive @ <project>` form: a non-fleet
+    /// session with no prompt/headless argv marker, i.e. one the captain is
+    /// driving. Drives the STATE column's interactive glyph.
+    pub interactive: bool,
 }
 
 /// Title is capped so the TASK column stays readable even when the backlog
@@ -103,16 +107,17 @@ impl TaskInfo {
                 .map(|s| s.to_string_lossy().into_owned())
         });
         if let Some(project) = project {
-            let line = if has_prompt_arg(cmdline) {
+            let (line, interactive) = if has_prompt_arg(cmdline) {
                 // Autonomous session whose task we could not identify: show
                 // where it is working without the misleading "interactive".
-                project.clone()
+                (project.clone(), false)
             } else {
-                format!("interactive @ {}", project)
+                (format!("interactive @ {}", project), true)
             };
             return ResolvedTask {
                 line,
                 project: None,
+                interactive,
             };
         }
 
@@ -121,6 +126,7 @@ impl TaskInfo {
         ResolvedTask {
             line,
             project: None,
+            interactive: false,
         }
     }
 }
@@ -141,7 +147,11 @@ fn fleet_task_parts(rec: &TaskRecord, titles: &TaskTitles) -> ResolvedTask {
         }
         None => rec.task_id.clone(),
     };
-    ResolvedTask { line, project }
+    ResolvedTask {
+        line,
+        project,
+        interactive: false,
+    }
 }
 
 /// Basename of a fleet record's `project=` path (`…/projects/crew-watch` →

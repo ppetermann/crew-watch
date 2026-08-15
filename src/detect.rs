@@ -153,6 +153,9 @@ pub struct Session {
     /// Compact display model parsed from argv (e.g. `glm-5.2`), or empty when
     /// no model flag was present (filled by the caller; rendered as `-`).
     pub model: String,
+    /// Current activity for the STATE glyph column (filled by the caller via
+    /// [`crate::activity`]; defaults to unknown).
+    pub activity: crate::activity::Activity,
 }
 
 /// Walk strict parents of `pid` until reaching a detected agent, or run out.
@@ -274,6 +277,7 @@ pub fn build_sessions(curr: &Snapshot, prev: Option<&Snapshot>) -> Vec<Session> 
             task: String::new(),
             task_project: None,
             model: String::new(),
+            activity: crate::activity::Activity::default(),
         });
     }
 
