@@ -244,7 +244,7 @@ deterministic width ladder on narrow terminals:
   for a column no other row needs. This is TUI-only: `--once` stays bar-free and
   unaligned, so its output stays easy to script against.
 - **Cadence.** The fetch runs on a **background thread** at its own cadence
-  (default 300s; `--quota-interval`, clamped 60..=3600) and is bounded by a 10s
+  (default 600s; `--quota-interval`, clamped 60..=3600) and is bounded by a 10s
   kill-timeout. It is **never** on the `/proc` tick path, which stays read-once
   per refresh. A 60s floor is enforced because the quota tool rate-limits under
   faster polling.

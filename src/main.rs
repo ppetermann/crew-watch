@@ -208,14 +208,14 @@ fn handle_dialog_key(app: &mut App, k: KeyEvent) {
 }
 
 /// Effective quota poll cadence for `--quota-interval`, clamped to 60..=3600s
-/// (a non-finite argument falls back to the 300s default). The 60s floor is not
+/// (a non-finite argument falls back to the 600s default). The 60s floor is not
 /// arbitrary — polling the quota tool faster than once a minute gets the account
 /// rate-limited — so an under-floor value is raised, never honoured.
 fn resolve_quota_interval(arg_secs: f64) -> Duration {
     let secs = if arg_secs.is_finite() {
         arg_secs.clamp(60.0, 3600.0)
     } else {
-        300.0
+        600.0
     };
     Duration::from_secs_f64(secs)
 }
@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn quota_interval_default_and_in_range_values_pass_through() {
-        assert_eq!(resolve_quota_interval(300.0), Duration::from_secs(300));
+        assert_eq!(resolve_quota_interval(600.0), Duration::from_secs(600));
         assert_eq!(resolve_quota_interval(90.0), Duration::from_secs(90));
     }
 
@@ -421,10 +421,10 @@ mod tests {
     #[test]
     fn quota_interval_above_ceiling_and_non_finite_are_bounded() {
         assert_eq!(resolve_quota_interval(99_999.0), Duration::from_secs(3600));
-        assert_eq!(resolve_quota_interval(f64::NAN), Duration::from_secs(300));
+        assert_eq!(resolve_quota_interval(f64::NAN), Duration::from_secs(600));
         assert_eq!(
             resolve_quota_interval(f64::INFINITY),
-            Duration::from_secs(300)
+            Duration::from_secs(600)
         );
     }
 
