@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
+use crate::activity::fit_state;
 use crate::agent_cols::{
     compressed_col_widths, fit_cpu, fit_elapsed, fit_header, fit_mem, fit_pid, task_width,
     AGENT_COL_SPACING,
@@ -31,9 +32,9 @@ const MEM_BAR_WIDTH: usize = 20;
 /// CPU%, MEM): their magnitudes stack on the right edge so rows compare at a
 /// glance. PID joins them — like htop and `ps`, and matching `--once` — even
 /// though it is an identifier, not a magnitude; digits read as one numeric
-/// block. Text columns (RUNTIME, MODEL, TASK) stay left-aligned, and `--once`
-/// aligns the same columns the same way, so the two surfaces read alike (the
-/// column *widths* differ by design; only alignment is shared).
+/// block. Text columns (STATE, RUNTIME, MODEL, TASK) stay left-aligned, and
+/// `--once` aligns the same columns the same way, so the two surfaces read
+/// alike (the column *widths* differ by design; only alignment is shared).
 ///
 /// Callers must pass content already fitted to the column's width via the
 /// [`crate::agent_cols`] helpers: ratatui truncates an over-width
@@ -288,15 +289,17 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
     // fitting budget, so ratatui never has to shrink a column itself and the
     // right-aligned cells are never truncated from the left.
     let cols = compressed_col_widths(area.width);
-    let (pid_w, elapsed_w, cpu_w, mem_w) = (
-        cols[2] as usize,
+    let (state_w, pid_w, elapsed_w, cpu_w, mem_w) = (
+        cols[0] as usize,
         cols[3] as usize,
         cols[4] as usize,
         cols[5] as usize,
+        cols[6] as usize,
     );
     let task_w = task_width(area.width, &cols);
 
     let header = Row::new(vec![
+        Cell::from(fit_header("S", state_w)),
         Cell::from("RUNTIME"),
         Cell::from("MODEL"),
         right_cell(fit_header("PID", pid_w)),
@@ -309,6 +312,7 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
 
     let rows = app.sessions.iter().map(|s| {
         Row::new(vec![
+            Cell::from(fit_state(s.activity, state_w)),
             Cell::from(s.kind.display.to_string()).style(Style::default().fg(kind_color(s.kind))),
             Cell::from(if s.model.is_empty() {
                 "-".to_string()

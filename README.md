@@ -13,7 +13,7 @@ agent session, with CPU% and memory aggregated over the agent's entire subtree
 ┌─ system overview ───────────────────────────────────────────┐
 │ per-core usage bars · mem/swap bars · tasks / load / uptime │
 ├─ agents ────────────────────────────────────────────────────┤
-│ RUNTIME   MODEL   PID   ELAPSED   CPU%   MEM   TASK         │
+│ S   RUNTIME   MODEL   PID   ELAPSED   CPU%   MEM   TASK     │
 ├─────────────────────────────────────────────────────────────┤
 │ quota row: one line per provider (session/week/model bars)  │
 └─────────────────────────────────────────────────────────────┘
@@ -66,10 +66,10 @@ to verify detection or to script a fleet check without a terminal:
 ```
 $ crew-watch --once
 cores=20 mem=12.8GiB/30.6GiB swap=2.7GiB/128.0GiB tasks=1092 load=1.63 1.70 1.87 up=3d 0:19:57
-RUNTIME    MODEL              PID    ELAPSED      CPU%          MEM  TASK
-opencode   glm-5.3        2097118      31:59     77.5%     848.6MiB  eve-members: public share link for a tenant's upcoming timers
-opencode   glm-5.3        2098092      31:32     75.5%       1.1GiB  crew-watch: right-align the ELAPSED, CPU% and MEM columns
-claude     -               483889   51:34:23      1.0%     594.2MiB  interactive @ firstmate
+STATE   RUNTIME    MODEL              PID    ELAPSED      CPU%          MEM  TASK
+busy    opencode   glm-5.3        2097118      31:59     77.5%     848.6MiB  eve-members: public share link for a tenant's upcoming timers
+wait    opencode   glm-5.3        2098092      31:32     75.5%       1.1GiB  crew-watch: right-align the ELAPSED, CPU% and MEM columns
+human   claude     -               483889   51:34:23      1.0%     594.2MiB  interactive @ firstmate
 ...
 quota claude   session 12% 1h14m  week 53% 3d2h  fable 50% 3d2h
 quota zai      session 51% 2h40m  week 10% 16h4m  MCP month 0% 10d16h
@@ -86,6 +86,9 @@ quota zai      session 51% 2h40m  week 10% 16h4m  MCP month 0% 10d16h
 
 **Bottom — agent list, one row per running agent session:**
 
+- `STATE` — what the agent is doing right now, as one emoji in the TUI (whose
+  header is a bare `S`, so the column costs two cells) and a plain word in
+  `--once`; see the table below.
 - `RUNTIME` — which agent runtime it is (`claude`, `opencode`, ...).
 - `MODEL` — the model the agent is running, parsed from its `--model` argv flag
   with the provider prefix stripped for compactness
@@ -98,9 +101,36 @@ quota zai      session 51% 2h40m  week 10% 16h4m  MCP month 0% 10d16h
 - `TASK` — a one-line description of what the agent is working on (see below).
 
 Numeric columns (`PID`, `ELAPSED`, `CPU%`, `MEM`) are right-aligned so
-magnitudes stack and rows compare at a glance; text columns (`RUNTIME`,
-`MODEL`, `TASK`) are left-aligned. The TUI table and `--once` follow the
-same rule.
+magnitudes stack and rows compare at a glance; text columns (`STATE`,
+`RUNTIME`, `MODEL`, `TASK`) are left-aligned. The TUI table and `--once`
+follow the same rule.
+
+### STATE column
+
+Each fleet row's state comes from firstmate's per-task state files (read
+best-effort every refresh, keyed by the record's filename stem): the last
+lifecycle verb of `state/<stem>.status` beats everything; within `working`,
+the gen-validated `state/<stem>.busy-state` record splits busy from waiting.
+
+| state                    | TUI  | `--once` | meaning                                            |
+|--------------------------|------|----------|----------------------------------------------------|
+| busy (mid-turn)          | 🔨   | `busy`   | lifecycle working, turn open right now             |
+| waiting (between turns)  | 💤   | `wait`   | lifecycle working, settled between turns           |
+| working, turn unknown    | 🚧   | `work`   | working but no valid busy signal (codex/kimi/grok/muse, stale gen) |
+| needs decision           | ❓   | `ask`    | asked a question a human must answer               |
+| blocked                  | 🛑   | `blocked`| reported itself stuck                              |
+| paused                   | ⏳   | `paused` | deliberately idling on a known external wait       |
+| done (process lingering) | ✅   | `done`   | reported done, process still alive                 |
+| failed                   | ❌   | `failed` | reported failed                                    |
+| interactive              | 👤   | `human`  | non-fleet session the captain is driving           |
+| unknown (default)        | 🤖   | `-`      | everything else (non-fleet autonomous row)         |
+
+On a narrow terminal the emoji column compresses to one cell and falls back
+to single-character ASCII forms (`*`, `z`, `w`, `?`, `!`, `~`, `+`, `x`,
+`@`, `.`).
+
+The authoritative glyph, ASCII and word tables live in `src/activity.rs`
+(`glyph()`, `ascii()`, `once_label()`).
 
 On a terminal too narrow for the full table the TUI shrinks the fixed columns
 and the values shorten by unit and precision first (`848.6MiB` → `849MiB` →
@@ -272,8 +302,9 @@ request.
 
 The pure logic — `/proc` parsing, agent detection, subtree aggregation, meta
 parsing, model extraction, title lookup, project-name resolution, task
-resolution, quota parsing/row-building/dialog, and config — is unit-tested with
-fixture data. The TUI rendering itself is not unit-tested in v1.
+resolution, activity classification, quota parsing/row-building/dialog, and
+config — is unit-tested with fixture data. The TUI rendering itself is not
+unit-tested in v1.
 
 ## License
 

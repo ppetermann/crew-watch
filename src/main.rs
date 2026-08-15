@@ -1,6 +1,7 @@
 //! crew-watch entry point: argument parsing, terminal setup/teardown, and the
 //! render/tick event loop.
 
+mod activity;
 mod agent_cols;
 mod app;
 mod cli;
@@ -231,23 +232,27 @@ fn resolve_fm_home(arg: Option<PathBuf>) -> PathBuf {
 
 /// Fixed-width prefix of an agent row in `--once` output: every column before
 /// TASK plus the separating spaces.
-const ONCE_TASK_PREFIX_WIDTH: usize = 69;
+const ONCE_TASK_PREFIX_WIDTH: usize = 77;
 
 /// Header line of the agent table in `--once` output. Column *alignment*
 /// mirrors the TUI table (src/ui.rs): numeric columns — PID, ELAPSED, CPU%,
 /// MEM — right-align so magnitudes stack; text columns stay left-aligned. The
 /// column widths are this surface's own: `--once` writes to a plain stream and
-/// never reflows, so they need not match the TUI's.
+/// never reflows, so they need not match the TUI's. STATE is a word here, not
+/// the TUI's emoji glyph: words grep better and keep char count equal to
+/// display width (see [`crate::activity::Activity::once_label`]).
 fn once_agent_header() -> String {
     format!(
-        "{:<10} {:<14} {:>7} {:>10} {:>9} {:>12}  TASK",
-        "RUNTIME", "MODEL", "PID", "ELAPSED", "CPU%", "MEM"
+        "{:<7} {:<10} {:<14} {:>7} {:>10} {:>9} {:>12}  TASK",
+        "STATE", "RUNTIME", "MODEL", "PID", "ELAPSED", "CPU%", "MEM"
     )
 }
 
 /// One agent row in `--once` output, in the column geometry of
 /// [`once_agent_header`] and sharing the TUI table's per-column alignment.
+#[allow(clippy::too_many_arguments)]
 fn once_agent_row(
+    state: &str,
     kind: &str,
     model: &str,
     pid: i32,
@@ -258,7 +263,8 @@ fn once_agent_row(
 ) -> String {
     use crate::format_util::{format_duration, format_kib, format_percent};
     format!(
-        "{:<10} {:<14.14} {:>7} {:>10} {:>9} {:>12}  {}",
+        "{:<7} {:<10} {:<14.14} {:>7} {:>10} {:>9} {:>12}  {}",
+        state,
         kind,
         model,
         pid,
@@ -333,6 +339,7 @@ fn print_once(app: &App) {
             println!(
                 "{}",
                 once_agent_row(
+                    s.activity.once_label(),
                     s.kind.display,
                     &model,
                     s.pid,
@@ -431,6 +438,7 @@ mod tests {
         // The captain's example rows: same columns, different value widths.
         // 827115 pid, 3:38:41 elapsed, 2.0% cpu, 722.0MiB rss (739328 KiB).
         let short = once_agent_row(
+            "busy",
             "opencode",
             "glm-5.3",
             827_115,
@@ -441,6 +449,7 @@ mod tests {
         );
         // 483889 pid, 38:23:40 elapsed, 31.8% cpu, 687.8MiB rss (704307 KiB).
         let long = once_agent_row(
+            "blocked",
             "claude",
             "-",
             483_889,
@@ -475,10 +484,19 @@ mod tests {
 
     #[test]
     fn once_text_columns_stay_left_and_task_follows_the_fixed_prefix() {
-        let row = once_agent_row("claude", "-", 5463, 10_231, 0.0, 573_440, "interactive");
-        // RUNTIME at column 0, MODEL left-aligned in its own column.
-        assert!(row.starts_with("claude"));
-        assert!(row.starts_with("claude     -"));
+        let row = once_agent_row(
+            "human",
+            "claude",
+            "-",
+            5463,
+            10_231,
+            0.0,
+            573_440,
+            "interactive",
+        );
+        // STATE at column 0, then RUNTIME and MODEL, all left-aligned.
+        assert!(row.starts_with("human   claude"));
+        assert!(row.starts_with("human   claude     -"));
         // TASK begins right after the fixed prefix (the width-fit boundary).
         assert_eq!(
             row.char_indices().nth(ONCE_TASK_PREFIX_WIDTH).unwrap().1,

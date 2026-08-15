@@ -27,9 +27,10 @@
 use crate::format_util::{format_duration, format_kib, format_percent};
 
 /// Fixed widths of every agent-table column before the flexible TASK column,
-/// at a terminal wide enough to hold them (RUNTIME, MODEL, PID, ELAPSED,
-/// CPU%, MEM).
-pub const AGENT_FIXED_COL_WIDTHS: [u16; 6] = [10, 14, 8, 10, 9, 12];
+/// at a terminal wide enough to hold them (STATE, RUNTIME, MODEL, PID,
+/// ELAPSED, CPU%, MEM). STATE is two cells: exactly one wide emoji glyph
+/// (see [`crate::activity`]); at one cell it degrades to the ASCII fallback.
+pub const AGENT_FIXED_COL_WIDTHS: [u16; 7] = [2, 10, 14, 8, 10, 9, 12];
 /// Blank columns ratatui inserts between two adjacent table columns.
 pub const AGENT_COL_SPACING: u16 = 1;
 /// TASK is never squeezed out entirely: it keeps at least this much even when
@@ -41,14 +42,14 @@ fn spacing_total() -> u16 {
     AGENT_COL_SPACING * (AGENT_FIXED_COL_WIDTHS.len() as u16)
 }
 
-/// Widths the six fixed columns get inside a table of `area_width` outer
+/// Widths the seven fixed columns get inside a table of `area_width` outer
 /// columns (borders included).
 ///
 /// Returns [`AGENT_FIXED_COL_WIDTHS`] unchanged whenever they fit alongside
 /// the spacing and a minimal TASK column — so nothing about wide-terminal
 /// rendering changes. Below that, every column shrinks proportionally (floor,
 /// never below one column), leaving the remainder to TASK.
-pub fn compressed_col_widths(area_width: u16) -> [u16; 6] {
+pub fn compressed_col_widths(area_width: u16) -> [u16; 7] {
     let nominal_total: u16 = AGENT_FIXED_COL_WIDTHS.iter().sum();
     let inner = area_width.saturating_sub(2);
     let budget = inner
@@ -58,7 +59,7 @@ pub fn compressed_col_widths(area_width: u16) -> [u16; 6] {
         return AGENT_FIXED_COL_WIDTHS;
     }
 
-    let mut out = [1u16; 6];
+    let mut out = [1u16; 7];
     let mut used = 0u16;
     for (slot, nominal) in out.iter_mut().zip(AGENT_FIXED_COL_WIDTHS) {
         let scaled = (u32::from(nominal) * u32::from(budget)) / u32::from(nominal_total);
@@ -79,7 +80,7 @@ pub fn compressed_col_widths(area_width: u16) -> [u16; 6] {
 
 /// Index of the widest column that can still give up a column, `None` when
 /// every column is already at the one-column floor.
-fn widest_shrinkable(widths: &[u16; 6]) -> Option<usize> {
+fn widest_shrinkable(widths: &[u16; 7]) -> Option<usize> {
     widths
         .iter()
         .enumerate()
@@ -89,7 +90,7 @@ fn widest_shrinkable(widths: &[u16; 6]) -> Option<usize> {
 }
 
 /// Width the flexible TASK column gets, given the fixed widths in use.
-pub fn task_width(area_width: u16, fixed: &[u16; 6]) -> usize {
+pub fn task_width(area_width: u16, fixed: &[u16; 7]) -> usize {
     let fixed_total: u16 = fixed.iter().sum();
     area_width
         .saturating_sub(2)
@@ -197,7 +198,7 @@ mod tests {
     use super::*;
 
     /// Narrowest terminal that still holds every nominal fixed column.
-    const NOMINAL_MIN_WIDTH: u16 = 2 + 63 + 6 + 1;
+    const NOMINAL_MIN_WIDTH: u16 = 2 + 65 + 7 + 1;
 
     #[test]
     fn wide_terminal_keeps_the_nominal_widths() {
@@ -227,12 +228,12 @@ mod tests {
             );
             let budget = area_width
                 .saturating_sub(2)
-                .saturating_sub(6)
+                .saturating_sub(7)
                 .saturating_sub(1);
-            // The six one-column floors are the hard minimum; above that the
-            // fixed columns always stay inside the budget.
+            // The seven one-column floors are the hard minimum; above that
+            // the fixed columns always stay inside the budget.
             assert!(
-                total <= budget.max(6),
+                total <= budget.max(7),
                 "width {area_width}: {widths:?} sums to {total}, budget {budget}"
             );
         }
@@ -251,10 +252,10 @@ mod tests {
         // Everything the table lays out — fixed columns, spacing, TASK — has
         // to fit inside the block's inner width, at every width where the
         // columns can hold their one-column floor.
-        for area_width in 15u16..=200 {
+        for area_width in 17u16..=200 {
             let widths = compressed_col_widths(area_width);
             let total: u16 = widths.iter().sum();
-            let laid_out = total + 6 + task_width(area_width, &widths) as u16;
+            let laid_out = total + 7 + task_width(area_width, &widths) as u16;
             assert_eq!(
                 laid_out,
                 area_width - 2,
@@ -353,10 +354,10 @@ mod tests {
         for area_width in 1u16..=200 {
             let widths = compressed_col_widths(area_width);
             let (pid_w, elapsed_w, cpu_w, mem_w) = (
-                widths[2] as usize,
                 widths[3] as usize,
                 widths[4] as usize,
                 widths[5] as usize,
+                widths[6] as usize,
             );
             for pid in pids {
                 assert!(fit_pid(pid, pid_w).chars().count() <= pid_w);

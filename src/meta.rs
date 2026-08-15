@@ -1,6 +1,6 @@
 //! Firstmate fleet-record parsing.
 //!
-//! Firstmate writes one `state/<task-id>.meta` file per task, containing
+//! Firstmate writes one `state/<stem>.meta` file per task, containing
 //! `key=value` lines (`worktree=`, `project=`, `endpoint_task_id=`,
 //! `harness=`, `window=`, ...). crew-watch matches an agent process to a
 //! record by its cwd (the worktree path).
@@ -16,6 +16,11 @@ use std::path::Path;
 #[derive(Debug, Clone, Default)]
 pub struct TaskRecord {
     pub task_id: String,
+    /// Filename stem of the `state/<stem>.meta` record. firstmate names the
+    /// sibling `.status` / `.busy-state` / `.busy-gen` files by this stem, so
+    /// it — not `task_id` — is the key for per-task state files (they coincide
+    /// in every observed record, but the stem is the correct key).
+    pub stem: String,
     pub worktree: Option<String>,
     pub project: Option<String>,
     pub harness: Option<String>,
@@ -67,8 +72,9 @@ pub fn load_fm_home(home: &Path) -> Vec<TaskRecord> {
         };
         let mut rec = parse_meta(&content);
         if rec.task_id.is_empty() {
-            rec.task_id = stem;
+            rec.task_id = stem.clone();
         }
+        rec.stem = stem;
         out.push(rec);
     }
     out
