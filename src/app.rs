@@ -73,7 +73,7 @@ impl App {
             prev: None,
             sessions: Vec::new(),
             quota_enabled: true,
-            quota_interval: Duration::from_secs(300),
+            quota_interval: Duration::from_secs(600),
             quota_selected: None,
             quota_rx: None,
             quota: QuotaState::default(),
