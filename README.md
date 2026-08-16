@@ -1,9 +1,10 @@
 # crew-watch
 
-A terminal monitor for a machine that is running AI coding agents. The top half
-is an htop-style system overview — per-core bars, memory, swap, load, uptime.
-The bottom half is the part htop cannot give you: **one row per running agent
-session**, with CPU and memory aggregated over that agent's entire process
+A terminal monitor for a machine that is running AI coding agents, built as a
+companion to **[firstmate](https://github.com/kunchenguid/firstmate)**. The top
+half is an htop-style system overview — per-core bars, memory, swap, load,
+uptime. The bottom half is the part htop cannot give you: **one row per running
+agent session**, with CPU and memory aggregated over that agent's entire process
 subtree (an agent's real cost is mostly the compilers, test runners and tools it
 spawns), plus the model it is running, how long it has been up, and a one-line
 description of what it is working on. If your provider quotas are readable
@@ -11,11 +12,18 @@ locally, a compact usage row sits at the bottom.
 
 ![crew-watch running against a busy fleet](docs/img/tui.png)
 
-`crew-watch` works standalone: point it at a box running `claude`, `opencode`,
-`codex` or friends and you immediately get the agent table. Point it at a
-[firstmate](https://github.com/ppetermann/firstmate) home as well and each row
-also picks up the task it is working on and a live activity glyph — busy,
-waiting, blocked, needs-decision, done.
+**crew-watch is built for [firstmate](https://github.com/kunchenguid/firstmate)
+fleets.** Point it at a firstmate home and every row picks up the task that
+agent is working on and a live activity glyph — busy, waiting, blocked,
+needs-decision, done — read straight from firstmate's own task state. That is
+the `TASK` and `STATE` half of the table, and it is what the tool is for. It
+reads upstream firstmate's file formats directly; no fork, plugin or
+configuration is required.
+
+Without a firstmate home it still runs and still earns its place — process
+detection, subtree CPU/memory, model and elapsed all work on any box running
+`claude`, `opencode`, `codex` or friends — but the `TASK` column falls back to
+the project directory and `STATE` stays on the interactive/unknown glyphs.
 
 Linux only.
 
@@ -44,6 +52,24 @@ cargo install --path .
 Either way the `crew-watch` binary lands in `~/.cargo/bin`, which rustup already
 puts on your `PATH`. If you would rather not install it, `cargo build --release`
 leaves the binary at `target/release/crew-watch`.
+
+### Optional: the quota row
+
+The provider-quota row at the bottom of the TUI is the one feature with an
+external dependency. crew-watch does not talk to any provider itself — it shells
+out to [`quota-axi`](https://www.npmjs.com/package/quota-axi), which reads your
+local provider credentials and reports the usage windows:
+
+```sh
+npm i -g quota-axi
+```
+
+Without it, crew-watch works normally and **the quota row is simply absent** —
+the layout is identical to a build without the feature, and no error is shown.
+(The one exception: if you have explicitly picked providers with the `p` dialog,
+a failing fetch shows a single dim `quota: unavailable (quota-axi not found)`
+line instead of hiding, so an explicit choice never fails silently.) Use
+`--no-quota` to disable the row and the background fetch outright.
 
 ## Usage
 
@@ -191,9 +217,11 @@ The `TASK` column is resolved from layered sources; the first that answers wins.
 
 ### firstmate integration
 
-Everything firstmate-specific is optional, read-only and best-effort: a missing,
-unreadable or unparseable file degrades that one signal and never fails a
-refresh. `crew-watch` reads no other tool's files and writes nothing back.
+This is what crew-watch is built for: the `TASK` and `STATE` columns come from
+[firstmate](https://github.com/kunchenguid/firstmate)'s own task state.
+Everything it reads is read-only and best-effort — a missing, unreadable or
+unparseable file degrades that one signal and never fails a refresh.
+`crew-watch` reads no other tool's files and writes nothing back.
 
 `crew-watch` looks for a firstmate home in this order:
 
@@ -239,11 +267,11 @@ countdown.
  zai    session █████████░░░  78% 1h11m  week █████░░░░░░░  40% 4d14h
 ```
 
-- **Source.** The row is populated by running `quota-axi --json`, an external
-  tool (not bundled with, and not required by, crew-watch) that reads the local
-  provider credentials and reports usage. If it is not on your `PATH` nothing
-  breaks — the row simply does not appear. Every quota failure is non-fatal and
-  leaves the rest of the monitor working.
+- **Source.** The row is populated by running `quota-axi --json` — the external
+  [`quota-axi`](https://www.npmjs.com/package/quota-axi) tool
+  (`npm i -g quota-axi`), not bundled with and not required by crew-watch. If it
+  is not on your `PATH` nothing breaks — the row simply does not appear. Every
+  quota failure is non-fatal and leaves the rest of the monitor working.
 - **Window order is fixed:** `session`, then `week`, then the provider's
   remaining windows alphabetically, so every provider's line reads the same way.
 - **Rows line up.** With several providers shown, the bars stack under each

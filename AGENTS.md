@@ -16,6 +16,13 @@ When updating this file, preserve this bar for all agents and keep entries conci
 Rust TUI: htop-style system overview + a per-agent table (one row per running AI
 runtime, with subtree-aggregated CPU/mem). Linux-only v1.
 
+**Built for [firstmate](https://github.com/kunchenguid/firstmate)** (upstream —
+link that URL, never a fork, wherever firstmate is referenced). The `TASK` and
+`STATE` columns are read from a firstmate home's own `state/` and `data/` files;
+crew-watch consumes upstream firstmate's formats read-only and writes nothing
+back, so it must keep working against any firstmate home without a fork or
+plugin. Treat those file formats as an external contract owned by firstmate.
+
 Docs are split by audience and that split is load-bearing — keep it. `README.md`
 is user-facing only (install, usage, columns, STATE table, detection table,
 quota row, configuration); `docs/development.md` is contributor-facing;

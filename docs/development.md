@@ -25,11 +25,12 @@ cargo run --release -- --once
 ## What is tested
 
 All the pure logic is unit-tested with fixture data: `/proc` parsing, runtime
-detection, subtree aggregation, firstmate record and title parsing, task
-resolution, model extraction, project-name resolution, activity classification,
-quota parsing, quota-row building, the provider dialog state machine, and the
-config file. The TUI rendering itself is not unit-tested — it is deliberately a
-thin mapper over tested pure functions (see
+detection, subtree aggregation,
+[firstmate](https://github.com/kunchenguid/firstmate) record and title parsing,
+task resolution, model extraction, project-name resolution, activity
+classification, quota parsing, quota-row building, the provider dialog state
+machine, and the config file. The TUI rendering itself is not unit-tested — it
+is deliberately a thin mapper over tested pure functions (see
 [design-notes.md](design-notes.md)), so tests target the functions rather than
 the frame.
 

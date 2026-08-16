@@ -2,12 +2,12 @@
 name = "crew-watch"
 version = "0.1.0"
 edition = "2021"
-description = "Terminal monitor for machines running AI coding agents: htop-style system overview plus one row per agent session with subtree-aggregated CPU and memory."
+description = "Terminal monitor for firstmate fleets: htop-style system overview plus one row per running AI agent session, with subtree-aggregated CPU and memory, task and activity."
 license = "MIT"
 repository = "https://github.com/ppetermann/crew-watch"
 homepage = "https://github.com/ppetermann/crew-watch"
 readme = "README.md"
-keywords = ["tui", "monitoring", "htop", "agents", "process"]
+keywords = ["firstmate", "tui", "monitoring", "htop", "agents"]
 categories = ["command-line-utilities", "os::linux-apis"]
 exclude = ["/docs/img", "/.github"]
 

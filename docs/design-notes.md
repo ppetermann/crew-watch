@@ -3,6 +3,12 @@
 Why crew-watch is built the way it is. Nothing here is needed to *use* the tool
 — see the [README](../README.md) for that.
 
+crew-watch is a companion to
+[firstmate](https://github.com/kunchenguid/firstmate) (upstream): the `TASK` and
+`STATE` columns are read from a firstmate home. Those file formats are an
+external contract owned by firstmate, which is why every read of them is
+optional and best-effort — see [Robustness rules](#robustness-rules).
+
 ## Pure logic, separated from I/O and from rendering
 
 Every non-trivial decision lives in a pure function with fixture-driven tests;
