@@ -29,13 +29,18 @@ Linux only.
 
 ## Install
 
-`crew-watch` is not on crates.io yet, so installing means building from source.
-You need a recent stable [Rust toolchain](https://rustup.rs) and — as for any
-native Rust binary on a glibc target — a working C link chain (`build-essential`
-on Debian/Ubuntu, `gcc` on Fedora; both distros ship it in the usual developer
-meta-packages).
+`crew-watch` is published on crates.io, so the easiest install is:
 
-Install straight from the repository:
+```sh
+cargo install crew-watch
+```
+
+Every install path compiles locally, so you need a recent stable
+[Rust toolchain](https://rustup.rs) and — as for any native Rust binary on a
+glibc target — a working C link chain (`build-essential` on Debian/Ubuntu,
+`gcc` on Fedora; both distros ship it in the usual developer meta-packages).
+
+You can also install straight from the repository:
 
 ```sh
 cargo install --git https://github.com/ppetermann/crew-watch
@@ -49,9 +54,9 @@ cd crew-watch
 cargo install --path .
 ```
 
-Either way the `crew-watch` binary lands in `~/.cargo/bin`, which rustup already
-puts on your `PATH`. If you would rather not install it, `cargo build --release`
-leaves the binary at `target/release/crew-watch`.
+Whichever route you take, the `crew-watch` binary lands in `~/.cargo/bin`, which
+rustup already puts on your `PATH`. If you would rather not install it,
+`cargo build --release` leaves the binary at `target/release/crew-watch`.
 
 ### Optional: the quota row
 
