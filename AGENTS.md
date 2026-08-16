@@ -14,8 +14,21 @@ When updating this file, preserve this bar for all agents and keep entries conci
 ## crew-watch
 
 Rust TUI: htop-style system overview + a per-agent table (one row per running AI
-runtime, with subtree-aggregated CPU/mem). Linux-only v1. See `README.md` for
-the full user-facing spec (install, usage, detection table, firstmate records).
+runtime, with subtree-aggregated CPU/mem). Linux-only v1.
+
+**Built for [firstmate](https://github.com/kunchenguid/firstmate)** (upstream —
+link that URL, never a fork, wherever firstmate is referenced). The `TASK` and
+`STATE` columns are read from a firstmate home's own `state/` and `data/` files;
+crew-watch consumes upstream firstmate's formats read-only and writes nothing
+back, so it must keep working against any firstmate home without a fork or
+plugin. Treat those file formats as an external contract owned by firstmate.
+
+Docs are split by audience and that split is load-bearing — keep it. `README.md`
+is user-facing only (install, usage, columns, STATE table, detection table,
+quota row, configuration); `docs/development.md` is contributor-facing;
+`docs/design-notes.md` holds the architecture and the rationale behind the
+layout/robustness contracts. Nothing fleet-internal or operator-specific belongs
+in `README.md`.
 
 ### Build / test / lint (authoritative commands)
 
@@ -34,9 +47,18 @@ the full user-facing spec (install, usage, detection table, firstmate records).
 
 ### Sharp edge: building on a host without gcc
 
-The captain's workstation this was built on had no system `cc`/`gcc` (and no
-passwordless sudo). A `cc` shim at `~/.local/bin/cc` drives the `lld` bundled
-with rustup and supplies the glibc PIE crt, so `cargo build` works without root.
-On any normal host with `build-essential` installed, plain `cargo build` works
-and the shim is unnecessary. CI (ubuntu-latest) has gcc by default.
+Linking needs a C link chain. On a host with no system `cc`/`gcc` and no
+passwordless sudo, a `cc` shim on `PATH` that drives the `lld` bundled with
+rustup and supplies the glibc PIE crt makes `cargo build` work without root. On
+any normal host with `build-essential`, plain `cargo build` works and the shim
+is unnecessary; CI (ubuntu-latest) has gcc by default. See
+`docs/development.md`.
+
+### Sharp edge: regenerating the README screenshots
+
+`docs/img/*.png` must never be captured against the real fleet: a synthetic
+scratch `--fm-home` plus stand-in processes only, inside a private PID
+namespace, on a dedicated `tmux -L <unique>` socket that is killed afterwards.
+Never drive the default tmux server for a capture. Procedure:
+`docs/development.md`.
 

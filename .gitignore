@@ -1,2 +1,6 @@
 /target
+
+# Local agent-tooling workspaces, not part of the project.
+.claude/
+.opencode/
 .lavish/
