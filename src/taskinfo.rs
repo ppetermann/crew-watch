@@ -2,7 +2,7 @@
 //!
 //! Sources are consulted in order; the first to answer wins:
 //! 1. **Firstmate fleet records** ([`crate::meta`]), matched by the agent's cwd.
-//!    The task line is prefixed with the project so the captain can see at a
+//!    The task line is prefixed with the project so a human can see at a
 //!    glance which project a worker is on: when the record carries `project=`,
 //!    its basename prefixes the line (`crew-watch: right-align the numeric
 //!    columns`). The project comes from the record, not the task id — ids only
@@ -13,7 +13,7 @@
 //! 2. **Unmatched with a cwd**: the project name (git repo name via
 //!    [`crate::project`], else the cwd basename), labelled
 //!    `interactive @ <project>` when no prompt arg is detected (an interactive
-//!    session the captain is driving). Bare flag noise like `-p --verbose` is
+//!    session a human is driving). Bare flag noise like `-p --verbose` is
 //!    never shown alone.
 //! 3. **No cwd at all**: a trimmed positional argv excerpt, else the runtime
 //!    name.
@@ -64,7 +64,7 @@ pub struct ResolvedTask {
     /// or project-less rows (their line already stands alone).
     pub project: Option<String>,
     /// True only for the layer-2 `interactive @ <project>` form: a non-fleet
-    /// session with no prompt/headless argv marker, i.e. one the captain is
+    /// session with no prompt/headless argv marker, i.e. one a human is
     /// driving. Drives the STATE column's interactive glyph.
     pub interactive: bool,
 }
