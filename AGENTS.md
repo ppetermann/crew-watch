@@ -49,11 +49,9 @@ is unnecessary; CI (ubuntu-latest) has gcc by default. See
 
 ### Sharp edge: regenerating the README screenshots
 
-`docs/img/*.png` are rendered from a **synthetic** scene — fake `state/*.meta`,
-`.status` and `.busy-state` files under a scratch `--fm-home` plus stand-in
-processes — never from the real fleet, so no private repo or task title reaches
-the docs. Render inside a private PID namespace (`bwrap … --unshare-pid`) so
-crew-watch only sees the stand-ins, drive a dedicated `tmux -L cw-shot-<random>`
-server, and kill only that socket. Never drive the default tmux server for a
-capture.
+`docs/img/*.png` must never be captured against the real fleet: a synthetic
+scratch `--fm-home` plus stand-in processes only, inside a private PID
+namespace, on a dedicated `tmux -L <unique>` socket that is killed afterwards.
+Never drive the default tmux server for a capture. Procedure:
+`docs/development.md`.
 

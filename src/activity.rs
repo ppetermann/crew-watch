@@ -51,7 +51,7 @@ pub enum Activity {
     Done,
     /// Fleet task reported failed.
     Failed,
-    /// Non-fleet session the captain is driving interactively.
+    /// Non-fleet session a human is driving interactively.
     Interactive,
     /// Anything else: non-fleet autonomous session, or no signal at all.
     #[default]

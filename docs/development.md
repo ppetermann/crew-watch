@@ -70,8 +70,18 @@ equivalent) installed, plain `cargo build` works and no shim is needed; CI on
 ## Screenshots
 
 The README images under `docs/img/` are rendered from a synthetic scene — fake
-task records under a scratch `--fm-home` and stand-in processes — rather than
-from a real machine, so no private repository or task name ends up in the docs.
-If you regenerate them, render into a *dedicated* tmux socket
-(`tmux -L <something-unique>`) and kill only that server afterwards; never drive
-a shared tmux server for a capture.
+`state/*.meta`, `.status` and `.busy-state` records under a scratch `--fm-home`
+plus stand-in processes — rather than from a real machine, so no private
+repository or task name ends up in the docs. Regenerating them safely means
+three things:
+
+- **Synthetic input only.** Point `--fm-home` at a scratch directory you filled
+  yourself. Never capture against a real firstmate home.
+- **A private PID namespace.** Run the capture under `bwrap … --unshare-pid` (or
+  an equivalent), so `crew-watch` can only see the stand-in processes and no
+  real command line reaches the image.
+- **A dedicated tmux socket.** Render on a socket created for the capture
+  (`tmux -L <something-unique>`) and kill only that server afterwards; never
+  drive a shared or default tmux server for a capture.
+
+The panes used for the current images are 150x24 (TUI) and 150x16 (`--once`).
