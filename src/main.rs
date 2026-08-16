@@ -8,6 +8,7 @@ mod app;
 mod cli;
 mod config;
 mod detect;
+mod eta;
 mod format_util;
 mod meta;
 mod model;
