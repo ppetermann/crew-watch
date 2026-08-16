@@ -14,8 +14,14 @@ When updating this file, preserve this bar for all agents and keep entries conci
 ## crew-watch
 
 Rust TUI: htop-style system overview + a per-agent table (one row per running AI
-runtime, with subtree-aggregated CPU/mem). Linux-only v1. See `README.md` for
-the full user-facing spec (install, usage, detection table, firstmate records).
+runtime, with subtree-aggregated CPU/mem). Linux-only v1.
+
+Docs are split by audience and that split is load-bearing — keep it. `README.md`
+is user-facing only (install, usage, columns, STATE table, detection table,
+quota row, configuration); `docs/development.md` is contributor-facing;
+`docs/design-notes.md` holds the architecture and the rationale behind the
+layout/robustness contracts. Nothing fleet-internal or operator-specific belongs
+in `README.md`.
 
 ### Build / test / lint (authoritative commands)
 
@@ -34,9 +40,20 @@ the full user-facing spec (install, usage, detection table, firstmate records).
 
 ### Sharp edge: building on a host without gcc
 
-The captain's workstation this was built on had no system `cc`/`gcc` (and no
-passwordless sudo). A `cc` shim at `~/.local/bin/cc` drives the `lld` bundled
-with rustup and supplies the glibc PIE crt, so `cargo build` works without root.
-On any normal host with `build-essential` installed, plain `cargo build` works
-and the shim is unnecessary. CI (ubuntu-latest) has gcc by default.
+Linking needs a C link chain. On a host with no system `cc`/`gcc` and no
+passwordless sudo, a `cc` shim on `PATH` that drives the `lld` bundled with
+rustup and supplies the glibc PIE crt makes `cargo build` work without root. On
+any normal host with `build-essential`, plain `cargo build` works and the shim
+is unnecessary; CI (ubuntu-latest) has gcc by default. See
+`docs/development.md`.
+
+### Sharp edge: regenerating the README screenshots
+
+`docs/img/*.png` are rendered from a **synthetic** scene — fake `state/*.meta`,
+`.status` and `.busy-state` files under a scratch `--fm-home` plus stand-in
+processes — never from the real fleet, so no private repo or task title reaches
+the docs. Render inside a private PID namespace (`bwrap … --unshare-pid`) so
+crew-watch only sees the stand-ins, drive a dedicated `tmux -L cw-shot-<random>`
+server, and kill only that socket. Never drive the default tmux server for a
+capture.
 
