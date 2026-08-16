@@ -1,6 +1,7 @@
 //! crew-watch entry point: argument parsing, terminal setup/teardown, and the
 //! render/tick event loop.
 
+mod about;
 mod activity;
 mod agent_cols;
 mod app;
@@ -139,12 +140,17 @@ fn run<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<()> 
                 }
                 if app.dialog.is_some() {
                     handle_dialog_key(app, k);
+                } else if app.show_about {
+                    handle_about_key(app, k);
                 } else {
                     if is_quit(&k) {
                         return Ok(());
                     }
                     if matches!(k.code, KeyCode::Char('p')) && app.quota_enabled {
                         open_dialog(app);
+                    }
+                    if matches!(k.code, KeyCode::Char('a')) {
+                        app.show_about = true;
                     }
                     // Any non-quit key clears the transient notice.
                     app.notice = None;
@@ -204,6 +210,16 @@ fn handle_dialog_key(app: &mut App, k: KeyEvent) {
             app.dialog = None;
         }
         Outcome::Pending => {}
+    }
+}
+
+/// Route a key while the about overlay is open: the trigger key, `q` and
+/// `Esc` close it (the same dismiss set as the quota dialog), everything else
+/// is consumed so the overlay never leaks keys into the main view. `Ctrl-C`
+/// still quits — it is checked before this runs, as for the dialog.
+fn handle_about_key(app: &mut App, k: KeyEvent) {
+    if about::handle_key(k.code) == about::Outcome::Close {
+        app.show_about = false;
     }
 }
 

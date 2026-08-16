@@ -40,6 +40,9 @@ pub struct App {
     pub notice: Option<String>,
     /// Provider-selection dialog; `Some` while open, rendered as an overlay.
     pub dialog: Option<crate::quota_dialog::QuotaDialog>,
+    /// About overlay; `true` while open. A view, not a mode: ticks and quota
+    /// updates continue underneath while it is up.
+    pub show_about: bool,
 }
 
 /// Last-known quota fetch state. On a [`QuotaFetch::Failed`] the previous report
@@ -79,6 +82,7 @@ impl App {
             quota: QuotaState::default(),
             notice: None,
             dialog: None,
+            show_about: false,
         }
     }
 

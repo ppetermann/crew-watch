@@ -102,6 +102,7 @@ Key bindings inside the TUI:
 |-----|--------|
 | `q` / `Esc` / `Ctrl-C` | quit |
 | `p` | choose which quota providers get a row (when the quota row is enabled) |
+| `a` | about screen (version, license, project link); `a` / `q` / `Esc` closes |
 
 Keybindings are deliberately minimal.
 

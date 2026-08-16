@@ -28,6 +28,7 @@ I/O is a single `/proc` pass plus a handful of small best-effort file reads.
 | `src/quota.rs` | quota report parsing and the background poller |
 | `src/quota_row.rs` | the pure quota-row builder |
 | `src/quota_dialog.rs` | provider-selection dialog as a state machine over key codes |
+| `src/about.rs` | about overlay: key semantics, wrapped content and centered geometry |
 | `src/config.rs` | the `key=value` config file |
 | `src/agent_cols.rs` | agent-table column geometry and per-value fitting |
 | `src/format_util.rs` | human-readable formatting, bars, reset labels |
