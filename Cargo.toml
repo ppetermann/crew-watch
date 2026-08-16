@@ -1,6 +1,6 @@
 [package]
 name = "crew-watch"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Terminal monitor for firstmate fleets: htop-style system overview plus one row per running AI agent session, with subtree-aggregated CPU and memory, task and activity."
 license = "MIT"
