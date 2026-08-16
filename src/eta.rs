@@ -4,10 +4,9 @@
 /// e.g. `3661` -> `"1h 1m 1s"`.
 #[allow(dead_code)]
 pub fn format_eta(remaining_secs: u64) -> String {
-    let millis = remaining_secs.checked_mul(1000).unwrap();
-    let hours = millis / 3_600_000;
-    let minutes = millis / 60_000;
-    let secs = millis % 60_000 / 1000;
+    let hours = remaining_secs / 3600;
+    let minutes = remaining_secs % 3600 / 60;
+    let secs = remaining_secs % 60;
     format!("{hours}h {minutes}m {secs}s")
 }
 
@@ -17,11 +16,26 @@ mod tests {
 
     #[test]
     fn formats_each_component() {
-        assert_eq!(format_eta(3661), "1h 61m 1s");
+        assert_eq!(format_eta(3661), "1h 1m 1s");
+    }
+
+    #[test]
+    fn formats_over_an_hour() {
+        assert_eq!(format_eta(7322), "2h 2m 2s");
     }
 
     #[test]
     fn formats_minutes_only() {
         assert_eq!(format_eta(60), "0h 1m 0s");
+    }
+
+    #[test]
+    fn formats_sub_minute() {
+        assert_eq!(format_eta(5), "0h 0m 5s");
+    }
+
+    #[test]
+    fn large_input_does_not_panic() {
+        assert_eq!(format_eta(u64::MAX), "5124095576030431h 0m 15s");
     }
 }
