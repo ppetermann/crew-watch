@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
+use crate::about;
 use crate::activity::fit_state;
 use crate::agent_cols::{
     compressed_col_widths, fit_cpu, fit_elapsed, fit_header, fit_mem, fit_pid, task_width,
@@ -65,6 +66,15 @@ pub fn draw(f: &mut Frame, app: &App) {
     if let Some(dialog) = app.dialog.as_ref() {
         if let Some(rect) = centered_dialog(area, dialog.items.len()) {
             draw_dialog(f, rect, app);
+        }
+    }
+    // The about overlay sits on top of everything. It is mutually exclusive
+    // with the dialog by key routing: each opens only from the main view.
+    if app.show_about {
+        let inner = (about::panel_width(area).saturating_sub(2) as usize).max(1);
+        let body = about::about_lines(inner);
+        if let Some(rect) = about::centered_rect(area, body.len()) {
+            draw_about(f, rect, &body);
         }
     }
 }
@@ -370,7 +380,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         ""
     };
     let line = Line::from(format!(
-        " q/Esc/Ctrl-C quit{providers_binding}  |  refresh {:.1}s  |  detecting: {}",
+        " q/Esc/Ctrl-C quit  |  a about{providers_binding}  |  refresh {:.1}s  |  detecting: {}",
         interval,
         agent_ids.join(", "),
     ));
@@ -527,6 +537,44 @@ fn draw_dialog(f: &mut Frame, area: Rect, app: &App) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         " space toggle · enter save · esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+// ---------------------------------------------------------------------------
+// About overlay
+// ---------------------------------------------------------------------------
+
+/// The about overlay: the app's identity (name+version, description,
+/// repository link, MIT notice) in a centered panel. Content and geometry
+/// come from [`crate::about`]; this is just the ratatui mapping, in the same
+/// shape as the quota dialog (clear underlay, bordered block, dim footer).
+fn draw_about(f: &mut Frame, area: Rect, body: &[String]) {
+    // Clear the background so the UI underneath doesn't show through.
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("About crew-watch");
+
+    let mut lines: Vec<Line<'static>> = body
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            // First body line is the name+version heading.
+            if i == 0 {
+                Line::from(Span::styled(
+                    l.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(l.clone())
+            }
+        })
+        .collect();
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " a/q/Esc close",
         Style::default().fg(Color::DarkGray),
     )));
     f.render_widget(Paragraph::new(lines).block(block), area);
