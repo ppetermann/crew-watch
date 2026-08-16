@@ -32,8 +32,8 @@ Linux only.
 `crew-watch` is not on crates.io yet, so installing means building from source.
 You need a recent stable [Rust toolchain](https://rustup.rs) and — as for any
 native Rust binary on a glibc target — a working C link chain (`build-essential`
-on Debian/Ubuntu, `gcc-c++` on Fedora; both distros ship it in the usual
-developer meta-packages).
+on Debian/Ubuntu, `gcc` on Fedora; both distros ship it in the usual developer
+meta-packages).
 
 Install straight from the repository:
 
