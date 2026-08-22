@@ -15,11 +15,16 @@
 //!
 //! ## Schema tolerance
 //!
-//! `quota-axi` reports schema 3 today. There is **no hard version gate** (D10):
-//! parsing is best-effort against whatever fields are present — unknown fields
-//! are ignored and optional ones default. A genuinely unparseable payload fails
-//! with a message carrying the recovered `schemaVersion`, so an additive v4
-//! still works and a broken one reports clearly.
+//! `quota-axi` has shipped two JSON shapes: schema 3 (windows carry
+//! `percentUsed`, providers carry `label`) and schema 5 (windows carry
+//! `percentRemaining`, the provider `label` is gone, `state` survives). There
+//! is **no hard version gate** (D10): parsing is best-effort against whatever
+//! fields are present — unknown fields are ignored, optional ones default, and
+//! each window's percent-used is taken from whichever field it carries
+//! (`percentUsed` verbatim, else `100 − percentRemaining`). A genuinely
+//! unparseable payload fails with a message carrying the recovered
+//! `schemaVersion`, so an additive v6 still works and a broken one reports
+//! clearly.
 
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
@@ -110,8 +115,13 @@ struct RawWindow {
     id: String,
     #[serde(default)]
     label: String,
+    /// Schema ≤3 field; absent in schema 5.
     #[serde(default)]
-    percent_used: f64,
+    percent_used: Option<f64>,
+    /// Schema 5 field; absent in schema 3. Presence is independent of
+    /// `percent_used` — see [`window_percent_used`] for precedence.
+    #[serde(default)]
+    percent_remaining: Option<f64>,
     #[serde(default)]
     resets_at: Option<String>,
 }
@@ -136,6 +146,14 @@ fn parse_status(s: &str) -> ProviderStatus {
     }
 }
 
+/// Percent-used for a window from whichever field its schema carries:
+/// `percentUsed` verbatim (schema ≤3), else `100 − percentRemaining` (schema
+/// 5), else 0. The explicit used value wins when both are present (schema 3
+/// emitted both, in agreement).
+fn window_percent_used(used: Option<f64>, remaining: Option<f64>) -> f64 {
+    used.or_else(|| remaining.map(|r| 100.0 - r)).unwrap_or(0.0)
+}
+
 /// Parse a `quota-axi --json` document. Lenient on optional/unknown fields;
 /// returns `Err` carrying the recovered schema version only when the input is
 /// not valid JSON or not a JSON object.
@@ -156,28 +174,37 @@ pub fn parse_report(input: &str) -> Result<QuotaReport, String> {
         providers: raw
             .providers
             .into_iter()
-            .map(|p| ProviderQuota {
-                id: p.provider,
-                label: p.label,
-                plan: p.plan,
-                windows: p
-                    .windows
-                    .into_iter()
-                    .map(|w| QuotaWindow {
-                        id: w.id,
-                        label: w.label,
-                        percent_used: w.percent_used,
-                        resets_at: w.resets_at,
-                    })
-                    .collect(),
-                status: p
-                    .state
-                    .status
-                    .as_deref()
-                    .map(parse_status)
-                    .unwrap_or(ProviderStatus::Unknown("missing".to_string())),
-                stale: p.state.stale,
-                error: p.state.error,
+            .map(|p| {
+                let id = p.provider;
+                ProviderQuota {
+                    // Schema 5 dropped the provider `label`; fall back to the
+                    // id so the struct never carries an empty name.
+                    label: if p.label.is_empty() {
+                        id.clone()
+                    } else {
+                        p.label
+                    },
+                    id,
+                    plan: p.plan,
+                    windows: p
+                        .windows
+                        .into_iter()
+                        .map(|w| QuotaWindow {
+                            id: w.id,
+                            label: w.label,
+                            percent_used: window_percent_used(w.percent_used, w.percent_remaining),
+                            resets_at: w.resets_at,
+                        })
+                        .collect(),
+                    status: p
+                        .state
+                        .status
+                        .as_deref()
+                        .map(parse_status)
+                        .unwrap_or(ProviderStatus::Unknown("missing".to_string())),
+                    stale: p.state.stale,
+                    error: p.state.error,
+                }
             })
             .collect(),
     })
@@ -404,9 +431,11 @@ pub fn spawn_poller(interval: Duration, tx: Sender<QuotaFetch>) -> thread::JoinH
 mod tests {
     use super::*;
 
-    // Trimmed but structurally complete capture of `quota-axi --json` (schema 3)
-    // covering the live shape (claude, 3 windows) and every failure shape seen on
-    // the captain's machine today. Mirrors the meta.rs SAMPLE idiom.
+    // Trimmed but structurally complete capture of `quota-axi --json` (schema 3,
+    // the pre-0.1.30 shape) covering the live shape (claude, 3 windows) and
+    // every failure shape seen on the captain's machine at the time. Retained
+    // deliberately: schema 3 homes must keep parsing across quota-axi
+    // upgrades. Mirrors the meta.rs SAMPLE idiom.
     const SAMPLE: &str = r#"{
   "generatedAt": "2026-08-13T13:54:46.385Z",
   "schemaVersion": 3,
@@ -435,8 +464,308 @@ mod tests {
       "state": { "status": "auth_required", "stale": false, "error": "GitHub Copilot sign-in required" } },
     { "provider": "grok",    "label": "Grok",    "source": "unavailable", "windows": [],
       "state": { "status": "auth_required", "stale": false, "error": "Grok sign-in required" } },
-    { "provider": "kimi",    "label": "Kimi",    "source": "unavailable", "windows": [],
+        { "provider": "kimi",    "label": "Kimi",    "source": "unavailable", "windows": [],
       "state": { "status": "auth_required", "stale": false, "error": "kimi_credential_unavailable" } }
+    ]
+}"#;
+
+    // Verbatim live capture of `quota-axi --json` from quota-axi 0.1.30
+    // (schema 5) on the captain's machine: windows carry `percentRemaining`
+    // (no `percentUsed`), providers carry no `label`, `state` survives, and a
+    // `quotaSemantics` block with `effectiveAvailability`/`pace` sub-objects
+    // rides along (all ignored by the parser). Contains only percentages and
+    // timestamps — nothing to redact.
+    const SAMPLE_V5: &str = r#"{
+  "generatedAt": "2026-08-22T20:44:31.900Z",
+  "schemaVersion": 5,
+  "providers": [
+    {
+      "provider": "claude",
+      "plan": "max",
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "session",
+          "kind": "session",
+          "resetsAt": "2026-08-22T23:30:00.306600+00:00",
+          "percentRemaining": 98,
+          "pace": {
+            "status": "behind",
+            "reservePercentPoints": 42.8422,
+            "burnMultiple": 0.0446
+          }
+        },
+        {
+          "id": "seven_day",
+          "label": "week",
+          "kind": "weekly",
+          "resetsAt": "2026-08-24T12:00:00.306623+00:00",
+          "percentRemaining": 29,
+          "pace": {
+            "status": "behind",
+            "reservePercentPoints": 5.6322,
+            "burnMultiple": 0.9265
+          }
+        },
+        {
+          "id": "model:fable",
+          "label": "Fable week",
+          "kind": "model",
+          "resetsAt": "2026-08-24T12:00:00.306855+00:00",
+          "percentRemaining": 37,
+          "pace": {
+            "status": "behind",
+            "reservePercentPoints": 13.6322,
+            "burnMultiple": 0.8221
+          }
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false
+      },
+      "quotaSemantics": {
+        "status": "known",
+        "effectiveAvailability": [
+          {
+            "scope": "all_models",
+            "status": "known",
+            "effectivePercentRemaining": 29,
+            "boundedBy": [
+              "five_hour",
+              "seven_day"
+            ],
+            "limitingWindowIds": [
+              "seven_day"
+            ],
+            "pace": {
+              "status": "behind",
+              "worstReservePercentPoints": 5.6322,
+              "worstReserveWindowId": "seven_day"
+            },
+            "runway": {
+              "status": "through_reset",
+              "projectionConfidence": "established"
+            },
+            "selection": {
+              "status": "known",
+              "spendPriority": 0.3555
+            }
+          },
+          {
+            "scope": "model:fable",
+            "status": "known",
+            "effectivePercentRemaining": 29,
+            "boundedBy": [
+              "five_hour",
+              "seven_day",
+              "model:fable"
+            ],
+            "limitingWindowIds": [
+              "seven_day"
+            ],
+            "pace": {
+              "status": "behind",
+              "worstReservePercentPoints": 5.6322,
+              "worstReserveWindowId": "seven_day"
+            },
+            "runway": {
+              "status": "through_reset",
+              "projectionConfidence": "established"
+            },
+            "selection": {
+              "status": "known",
+              "spendPriority": 0.5554
+            }
+          }
+        ]
+      }
+    },
+    {
+      "provider": "codex",
+      "windows": [],
+      "state": {
+        "status": "error",
+        "stale": false,
+        "error": "Codex quota unavailable"
+      },
+      "quotaSemantics": {
+        "status": "unknown",
+        "effectiveAvailability": []
+      }
+    },
+    {
+      "provider": "cursor",
+      "windows": [],
+      "state": {
+        "status": "error",
+        "stale": false,
+        "error": "sqlite3_unavailable"
+      },
+      "quotaSemantics": {
+        "status": "unknown",
+        "effectiveAvailability": []
+      }
+    },
+    {
+      "provider": "copilot",
+      "windows": [],
+      "state": {
+        "status": "auth_required",
+        "stale": false,
+        "error": "GitHub Copilot sign-in required"
+      },
+      "quotaSemantics": {
+        "status": "unknown",
+        "effectiveAvailability": [],
+        "unresolvedWindowIds": []
+      }
+    },
+    {
+      "provider": "grok",
+      "windows": [],
+      "state": {
+        "status": "auth_required",
+        "stale": false,
+        "error": "Grok sign-in required",
+        "authStatus": "unusable"
+      },
+      "quotaSemantics": {
+        "status": "unknown",
+        "effectiveAvailability": []
+      }
+    },
+    {
+      "provider": "kimi",
+      "windows": [],
+      "state": {
+        "status": "auth_required",
+        "stale": false,
+        "error": "kimi_credential_unavailable"
+      },
+      "quotaSemantics": {
+        "status": "unknown",
+        "effectiveAvailability": []
+      }
+    },
+    {
+      "provider": "zai",
+      "plan": "max",
+      "windows": [
+        {
+          "id": "mcp_month",
+          "label": "MCP month",
+          "kind": "monthly",
+          "percentRemaining": 100,
+          "resetsAt": "2026-08-25T02:00:20.998Z",
+          "pace": {
+            "status": "unknown",
+            "reason": "missing_cycle"
+          }
+        },
+        {
+          "id": "five_hour",
+          "label": "session",
+          "kind": "session",
+          "percentRemaining": 70,
+          "resetsAt": "2026-08-22T22:07:26.949Z",
+          "pace": {
+            "status": "behind",
+            "reservePercentPoints": 42.3608,
+            "burnMultiple": 0.4146
+          }
+        },
+        {
+          "id": "weekly",
+          "label": "week",
+          "kind": "weekly",
+          "percentRemaining": 92,
+          "resetsAt": "2026-08-29T02:00:20.976Z",
+          "pace": {
+            "status": "behind",
+            "reservePercentPoints": 3.1526,
+            "burnMultiple": 0.7173
+          }
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false
+      },
+      "quotaSemantics": {
+        "status": "known",
+        "effectiveAvailability": [
+          {
+            "scope": "all_models",
+            "status": "known",
+            "effectivePercentRemaining": 70,
+            "boundedBy": [
+              "five_hour",
+              "weekly"
+            ],
+            "limitingWindowIds": [
+              "five_hour"
+            ],
+            "pace": {
+              "status": "behind",
+              "worstReservePercentPoints": 3.1526,
+              "worstReserveWindowId": "weekly"
+            },
+            "runway": {
+              "status": "through_reset",
+              "projectionConfidence": "established"
+            },
+            "selection": {
+              "status": "known",
+              "spendPriority": 0.3702
+            }
+          },
+          {
+            "scope": "tools",
+            "status": "known",
+            "effectivePercentRemaining": 100,
+            "boundedBy": [
+              "mcp_month"
+            ],
+            "limitingWindowIds": [
+              "mcp_month"
+            ],
+            "pace": {
+              "status": "unknown",
+              "unknownWindowIds": [
+                "mcp_month"
+              ]
+            },
+            "runway": {
+              "status": "unknown",
+              "unmeasurableWindowIds": [
+                "mcp_month"
+              ]
+            },
+            "selection": {
+              "status": "unknown",
+              "unmeasurableWindowIds": [
+                "mcp_month"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "provider": "agy",
+      "windows": [],
+      "state": {
+        "status": "error",
+        "stale": false,
+        "error": "Antigravity process discovery failed"
+      },
+      "quotaSemantics": {
+        "status": "unknown",
+        "effectiveAvailability": [],
+        "unresolvedWindowIds": []
+      }
+    }
   ]
 }"#;
 
@@ -485,6 +814,99 @@ mod tests {
             .map(|p| p.id.as_str())
             .collect();
         assert_eq!(with_windows, vec!["claude"]);
+    }
+
+    // --- schema 5 (quota-axi 0.1.30 live shape) ---
+
+    #[test]
+    fn parse_v5_live_fixture() {
+        let r = parse_report(SAMPLE_V5).expect("v5 fixture must parse");
+        assert_eq!(r.schema_version, Some(5));
+        assert_eq!(r.providers.len(), 8);
+        assert_eq!(r.generated_at, "2026-08-22T20:44:31.900Z");
+
+        let claude = &r.providers[0];
+        assert_eq!(claude.id, "claude");
+        // Schema 5 dropped provider labels; the parser falls back to the id.
+        assert_eq!(claude.label, "claude");
+        assert_eq!(claude.plan.as_deref(), Some("max"));
+        assert_eq!(claude.status, ProviderStatus::Fresh);
+        assert!(!claude.stale);
+        assert!(has_usage_windows(claude));
+        assert_eq!(claude.windows.len(), 3);
+        // percentRemaining → percent used (100 − remaining).
+        assert_eq!(claude.windows[0].id, "five_hour");
+        assert_eq!(claude.windows[0].label, "session");
+        assert!((claude.windows[0].percent_used - 2.0).abs() < 1e-9); // 98 remaining
+        assert!((claude.windows[1].percent_used - 71.0).abs() < 1e-9); // 29 remaining
+        assert!((claude.windows[2].percent_used - 63.0).abs() < 1e-9); // 37 remaining
+        assert_eq!(
+            claude.windows[0].resets_at.as_deref(),
+            Some("2026-08-22T23:30:00.306600+00:00")
+        );
+        assert_eq!(claude.windows[2].id, "model:fable");
+
+        let zai = r.providers.iter().find(|p| p.id == "zai").unwrap();
+        assert_eq!(zai.windows.len(), 3);
+        assert!((zai.windows[0].percent_used - 0.0).abs() < 1e-9); // mcp_month: 100 remaining
+        assert!((zai.windows[1].percent_used - 30.0).abs() < 1e-9); // session: 70 remaining
+        assert!((zai.windows[2].percent_used - 8.0).abs() < 1e-9); // week: 92 remaining
+    }
+
+    #[test]
+    fn parse_v5_failure_shapes_preserved() {
+        let r = parse_report(SAMPLE_V5).unwrap();
+        let by = |id: &str| r.providers.iter().find(|p| p.id == id).unwrap();
+        assert_eq!(by("codex").status, ProviderStatus::Error);
+        assert_eq!(
+            by("codex").error.as_deref(),
+            Some("Codex quota unavailable")
+        );
+        assert_eq!(by("grok").status, ProviderStatus::AuthRequired);
+        assert_eq!(by("agy").status, ProviderStatus::Error);
+        assert!(!has_usage_windows(by("codex")));
+        // claude and zai are the live providers in the v5 capture.
+        let live: Vec<&str> = r
+            .providers
+            .iter()
+            .filter(|p| has_usage_windows(p))
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(live, vec!["claude", "zai"]);
+    }
+
+    #[test]
+    fn percent_used_wins_when_both_fields_present() {
+        // Schema 3 emitted both fields (in agreement); if they ever disagree,
+        // the explicit used value is authoritative.
+        let r = parse_report(
+            r#"{ "providers": [ { "provider": "x",
+              "windows": [ { "id": "five_hour", "percentUsed": 10, "percentRemaining": 50 } ] } ] }"#,
+        )
+        .unwrap();
+        assert!((r.providers[0].windows[0].percent_used - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn v5_fractional_remaining_maps_fractionally() {
+        let r = parse_report(
+            r#"{ "schemaVersion": 5, "providers": [ { "provider": "x",
+              "windows": [ { "id": "five_hour", "percentRemaining": 42.5 } ] } ] }"#,
+        )
+        .unwrap();
+        assert!((r.providers[0].windows[0].percent_used - 57.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn window_with_neither_percent_field_defaults_zero() {
+        let r = parse_report(
+            r#"{ "schemaVersion": 5, "providers": [ { "provider": "x",
+              "windows": [ { "id": "five_hour", "label": "session",
+                             "resetsAt": "2026-08-22T23:30:00Z" } ] } ] }"#,
+        )
+        .unwrap();
+        assert!(r.providers[0].windows[0].percent_used.abs() < 1e-9);
+        assert!(has_usage_windows(&r.providers[0]));
     }
 
     #[test]
