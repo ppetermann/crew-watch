@@ -29,3 +29,41 @@ jobs:
 
       - name: cargo test
         run: cargo test --all
+
+      - name: Add darwin check targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: cargo check (darwin targets)
+        run: |
+          cargo check --target aarch64-apple-darwin
+          cargo check --target x86_64-apple-darwin
+
+  check-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --all
+
+      - name: cargo build --release
+        run: cargo build --release
+
+      - name: Smoke test (fake agent detected end-to-end)
+        run: |
+          bash -c 'exec -a claude /bin/sleep 300' & fake=$!
+          out=$(./target/release/crew-watch --once --no-quota)
+          kill "$fake"
+          echo "$out"
+          echo "$out" | grep -E '^cores=[1-9]'        # system snapshot is real
+          echo "$out" | grep -E '^\S+ +claude +'      # fake agent detected (RUNTIME col)

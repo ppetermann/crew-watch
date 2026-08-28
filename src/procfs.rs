@@ -5,6 +5,11 @@
 //! (no panic) when a `/proc` entry vanishes mid-read.
 
 use std::collections::HashMap;
+// The Linux parsers below stay compiled on every platform (their unit tests
+// run in the macOS CI job too), but on macOS the sysinfo backend replaces
+// `collect`, so they are unused in the macOS bin compilation. Allow just
+// that cfg combination; behavior is identical everywhere.
+#[cfg_attr(target_os = "macos", allow(unused_imports))]
 use std::fs;
 use std::path::PathBuf;
 
@@ -102,6 +107,7 @@ pub struct Snapshot {
 /// Parse `/proc/<pid>/stat`. `pid` is the directory pid (used as a fallback);
 /// the pid encoded in the file is authoritative. Returns `None` if the line is
 /// malformed (e.g. the process exited and the kernel recycled the entry).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_proc_pid_stat(pid: i32, content: &str) -> Option<ProcStat> {
     let open = content.find('(')?;
     let close = content.rfind(')')?;
@@ -122,11 +128,13 @@ pub fn parse_proc_pid_stat(pid: i32, content: &str) -> Option<ProcStat> {
     .map(|s| if s.pid == 0 { ProcStat { pid, ..s } } else { s })
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn get_idx(rest: &[&str], i: usize) -> Option<i32> {
     rest.get(i).and_then(|s| s.parse().ok())
 }
 
 /// Parse `/proc/<pid>/cmdline` (NUL-separated argv).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_cmdline(bytes: &[u8]) -> Vec<String> {
     bytes
         .split(|&b| b == 0)
@@ -137,6 +145,7 @@ pub fn parse_cmdline(bytes: &[u8]) -> Vec<String> {
 
 /// Parse `/proc/stat`. Returns every `cpu*` line (aggregate first in kernel
 /// output, but not assumed) plus `btime` if present.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_proc_stat(content: &str) -> (Vec<CpuLine>, Option<u64>) {
     let mut cpus = Vec::new();
     let mut btime = None;
@@ -159,6 +168,7 @@ pub fn parse_proc_stat(content: &str) -> (Vec<CpuLine>, Option<u64>) {
 }
 
 /// Parse `/proc/meminfo`.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_meminfo(content: &str) -> MemInfo {
     let mut m = MemInfo::default();
     for line in content.lines() {
@@ -183,6 +193,7 @@ pub fn parse_meminfo(content: &str) -> MemInfo {
 }
 
 /// Parse `/proc/loadavg`: `1m 5m 15m running/total pid`.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_loadavg(content: &str) -> Option<LoadAvg> {
     let mut it = content.split_whitespace();
     let one = it.next()?.parse::<f64>().ok()?;
@@ -203,6 +214,7 @@ pub fn parse_loadavg(content: &str) -> Option<LoadAvg> {
 }
 
 /// Parse `/proc/uptime` (first field, seconds since boot).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_uptime(content: &str) -> Option<Uptime> {
     let secs = content.split_whitespace().next()?.parse::<f64>().ok()?;
     Some(Uptime { secs })
@@ -210,6 +222,7 @@ pub fn parse_uptime(content: &str) -> Option<Uptime> {
 
 /// Read `/proc` once and build a [`Snapshot`]. Never panics on missing /
 /// vanishing entries: each per-pid file read is best-effort.
+#[cfg(not(target_os = "macos"))]
 pub fn collect() -> Snapshot {
     let mut procs = HashMap::new();
     if let Ok(entries) = fs::read_dir("/proc") {
@@ -251,6 +264,9 @@ pub fn collect() -> Snapshot {
         tick_hz: CLK_TZ,
     }
 }
+
+#[cfg(target_os = "macos")]
+pub use crate::macos::collect;
 
 #[cfg(test)]
 mod tests {

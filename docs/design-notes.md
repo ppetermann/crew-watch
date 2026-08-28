@@ -117,7 +117,19 @@ to display width.
 
 ## Scope
 
-Linux-only by design for v1: the process model is `/proc`, and a portable
-abstraction over it would cost more than it buys while the tool has one
-platform. CPU% on the very first frame is 0 — there is no previous sample to
-diff against yet — and becomes real from the second refresh onward.
+The collector is a compile-time dual backend behind one `Snapshot` contract:
+on Linux, `procfs::collect` reads `/proc` directly with zero extra
+dependencies; on macOS, `macos::backend::collect` fills the same `Snapshot`
+from the `sysinfo` crate. Everything downstream — detection, aggregation,
+state-file parsing, rendering — consumes only the `Snapshot` types and is
+platform-agnostic; the Linux reader itself is untouched by the macOS path.
+
+The one contract macOS cannot honor natively is cumulative per-core tick
+counters: sysinfo exposes per-core *usage %* only. So the macOS backend
+fabricates `/proc/stat`-shaped `CpuLine`s — a pure accumulator
+(`macos::convert::CpuAccum`) integrates usage% × elapsed × hz per core
+between ticks, and the usual Linux delta math downstream then reproduces
+exactly what sysinfo sampled: per-core meters render the sampled usage, and
+session CPU% keeps the one-core-= 100% convention on both platforms. CPU% on
+the very first frame is 0 — there is no previous sample to diff against yet —
+and becomes real from the second refresh onward.

@@ -9,6 +9,7 @@ mod cli;
 mod config;
 mod detect;
 mod format_util;
+mod macos;
 mod meta;
 mod model;
 mod procfs;
