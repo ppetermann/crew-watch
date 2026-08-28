@@ -25,7 +25,7 @@ detection, subtree CPU/memory, model and elapsed all work on any box running
 `claude`, `opencode`, `codex` or friends — but the `TASK` column falls back to
 the project directory and `STATE` stays on the interactive/unknown glyphs.
 
-Linux only.
+Linux and macOS.
 
 ## Install
 
@@ -304,11 +304,14 @@ quota claude   session 34% 2h24m  week 61% 3d7h  fable 22% 3d7h
 
 ## Requirements
 
-- **Linux.** `crew-watch` reads `/proc` directly and has no other backend.
-- A recent stable Rust toolchain to build it.
+- **Linux or macOS.** On Linux, `crew-watch` reads `/proc` directly. On macOS,
+  it uses the [`sysinfo`](https://crates.io/crates/sysinfo) crate; agents owned
+  by other users appear without task/cwd info unless run as root.
+- A recent stable Rust toolchain to build it — on macOS this means Xcode
+  Command Line Tools, which provide the linker.
 - Nothing else. There is no daemon, no config to write before first run, and no
-  network access on the monitoring path — `/proc` is read exactly once per
-  refresh.
+  network access on the monitoring path — the system is sampled exactly once
+  per refresh.
 
 ## Documentation
 

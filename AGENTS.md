@@ -14,7 +14,7 @@ When updating this file, preserve this bar for all agents and keep entries conci
 ## crew-watch
 
 Rust TUI: htop-style system overview + a per-agent table (one row per running AI
-runtime, with subtree-aggregated CPU/mem). Linux-only v1.
+runtime, with subtree-aggregated CPU/mem). Linux and macOS.
 
 **Built for [firstmate](https://github.com/kunchenguid/firstmate)** (upstream —
 link that URL, never a fork, wherever firstmate is referenced). The `TASK` and
@@ -39,7 +39,7 @@ in `README.md`.
 
 ### Architecture map (pure logic is split from I/O and from rendering)
 
-- `src/procfs.rs` — pure parsers (`parse_proc_pid_stat`, `parse_proc_stat`, `parse_meminfo`, `parse_loadavg`, `parse_uptime`, `parse_cmdline`) + `collect()` which reads `/proc` exactly once per tick.
+- `src/procfs.rs` — pure parsers (`parse_proc_pid_stat`, `parse_proc_stat`, `parse_meminfo`, `parse_loadavg`, `parse_uptime`, `parse_cmdline`) + Linux `collect()` which reads `/proc` exactly once per tick; the `Snapshot` struct is the platform contract. `src/macos/` — macOS backend: `backend.rs` (`sysinfo`-based `collect`, mutex-guarded state on the tick thread) + `convert.rs` (pure, test-built on every platform: fabricates `/proc`-shaped cumulative `CpuLine` counters from per-core usage% — read its tests before touching the math).
 - `src/detect.rs` — `AGENT_KINDS` detection table, `extract_candidates`, `build_sessions` (subtree aggregation; nearest-enclosing-agent attribution so nested agents are separate rows excluded from ancestors).
 - `src/meta.rs` — firstmate `state/*.meta` parsing. `src/titles.rs` — backlog.md + brief.md title lookup. `src/taskinfo.rs` — layered `TASK` resolution (fleet title → cwd project → argv). `src/model.rs` — `--model` argv extraction. `src/project.rs` — git-repo project-name resolution from cwd (handles worktrees). `src/activity.rs` — STATE-column classification: parses firstmate's `state/<stem>.status` verb + gen-guarded `.busy-state`/`.busy-gen` turn record into one `Activity` (lifecycle verb beats turn state); glyphs are pinned to single Wide scalars (no VS16/ZWJ — widths disagree across unicode-width 0.1/0.2/wcwidth and shear the grid; test-enforced), `--once` uses words, not emoji.
 - `src/quota.rs` — `quota-axi --json` parse (serde, schema-tolerant: reads both schema 3 windows, which carry `percentUsed`, and schema 5 (quota-axi ≥0.1.30) windows, which carry `percentRemaining` mapped to `100 − r`; whichever field is present wins, no version gate) + ISO-8601→epoch + background poller (`fetch_once`/`spawn_poller`, 10s kill-timeout, **never on the `/proc` tick path**). `src/quota_row.rs` — pure row builder: per-provider `build_provider_line` + multi-provider `build_quota_rows` (aligned block). Its two layout contracts — **canonical window order** and **aligned columns**, including how each degrades on a narrow terminal — are specified in that file's module header; read it before touching quota-row layout. `src/quota_dialog.rs` — provider-selection dialog (pure state machine over `KeyCode`). `src/config.rs` — `key=value` config file (`~/.config/crew-watch/config`, `quota_providers=`), same read-tolerance idiom as `meta.rs`.
