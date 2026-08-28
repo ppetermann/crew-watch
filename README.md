@@ -306,7 +306,8 @@ quota claude   session 34% 2h24m  week 61% 3d7h  fable 22% 3d7h
 
 - **Linux or macOS.** On Linux, `crew-watch` reads `/proc` directly. On macOS,
   it uses the [`sysinfo`](https://crates.io/crates/sysinfo) crate; agents owned
-  by other users appear without task/cwd info unless run as root.
+  by other users appear without task/cwd info unless run as root. macOS support
+  ships since 0.2.0 — earlier releases were Linux-only.
 - A recent stable Rust toolchain to build it — on macOS this means Xcode
   Command Line Tools, which provide the linker.
 - Nothing else. There is no daemon, no config to write before first run, and no
