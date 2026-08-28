@@ -210,6 +210,7 @@ pub fn parse_uptime(content: &str) -> Option<Uptime> {
 
 /// Read `/proc` once and build a [`Snapshot`]. Never panics on missing /
 /// vanishing entries: each per-pid file read is best-effort.
+#[cfg(not(target_os = "macos"))]
 pub fn collect() -> Snapshot {
     let mut procs = HashMap::new();
     if let Ok(entries) = fs::read_dir("/proc") {
