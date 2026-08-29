@@ -2,14 +2,20 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   check:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +45,7 @@ jobs:
           cargo check --target x86_64-apple-darwin
 
   check-macos:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
