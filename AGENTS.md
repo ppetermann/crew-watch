@@ -37,6 +37,28 @@ in `README.md`.
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` must stay clean (CI gates on them).
 - `crew-watch --once` — non-interactive one-shot dump; the way to verify detection/CPU/mem outside a TTY.
 
+### Delivery
+
+The fleet-wide flow: branch → local ladder → DRAFT PR → ready-flip → one CI run + one
+review round → merge. Drafts run no CI.
+
+- **Local ladder = the authoritative commands above**, in order: fmt --check, clippy
+  -D warnings, test. Green locally means green in CI (same commands).
+- **PRs open as drafts, always** (`gh pr create --draft`); flip on this PR's landing
+  turn after rebasing onto main and re-running the ladder: `gh pr ready <n>`
+  (undo: `gh pr ready <n> --undo`).
+- **Review gate:** the `ocr-review` check + one approving review (branch protection:
+  `check`, `check-macos`, `ocr-review` required, stale reviews dismissed, last push
+  must be approved).
+- **Release tail (batched):** one release PR bumps `version` in Cargo.toml and updates
+  README floors/notes (seed the notes with
+  `git log v<prev>..HEAD --merges --format='- %s (%h)'`). After it merges:
+  `git tag -a vX.Y.Z <merge-sha> -m "crew-watch X.Y.Z" && git push origin vX.Y.Z` —
+  **the tag push IS the publish** (the Publish workflow releases to crates.io via
+  trusted publishing; no token). Then rebuild the operator's PATH binary (target dir
+  outside the clone). Cut a release when a user-facing fix waited >48h, ≥3 merged PRs
+  are unreleased, or the operator asks.
+
 ### Architecture map (pure logic is split from I/O and from rendering)
 
 - `src/procfs.rs` — pure parsers (`parse_proc_pid_stat`, `parse_proc_stat`, `parse_meminfo`, `parse_loadavg`, `parse_uptime`, `parse_cmdline`) + Linux `collect()` which reads `/proc` exactly once per tick; the `Snapshot` struct is the platform contract. `src/macos/` — macOS backend: `backend.rs` (`sysinfo`-based `collect`, mutex-guarded state on the tick thread) + `convert.rs` (pure, test-built on every platform: fabricates `/proc`-shaped cumulative `CpuLine` counters from per-core usage% — read its tests before touching the math).
