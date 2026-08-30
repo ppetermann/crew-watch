@@ -118,8 +118,9 @@ struct RawWindow {
     /// Schema ≤3 field; absent in schema 5.
     #[serde(default)]
     percent_used: Option<f64>,
-    /// Schema 5 field; absent in schema 3. Presence is independent of
-    /// `percent_used` — see [`window_percent_used`] for precedence.
+    /// Carried by schema 5; schema 3 emitted it alongside percent_used on
+    /// some windows (in agreement). See [`window_percent_used`] for
+    /// precedence.
     #[serde(default)]
     percent_remaining: Option<f64>,
     #[serde(default)]
@@ -464,7 +465,7 @@ mod tests {
       "state": { "status": "auth_required", "stale": false, "error": "GitHub Copilot sign-in required" } },
     { "provider": "grok",    "label": "Grok",    "source": "unavailable", "windows": [],
       "state": { "status": "auth_required", "stale": false, "error": "Grok sign-in required" } },
-        { "provider": "kimi",    "label": "Kimi",    "source": "unavailable", "windows": [],
+    { "provider": "kimi",    "label": "Kimi",    "source": "unavailable", "windows": [],
       "state": { "status": "auth_required", "stale": false, "error": "kimi_credential_unavailable" } }
     ]
 }"#;
