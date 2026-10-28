@@ -345,9 +345,9 @@ mod tests {
 
     #[test]
     fn elapsed_ladder_handles_very_large_durations() {
-        // 1007 hours is `41d23h`; a century of runtime is `36500d0h`.
+        // 1007 hours is `41d23h`; a century of runtime is `36500d00h`.
         assert_eq!(fit_elapsed(1007 * 3600, 9), "41d23h");
-        assert_eq!(fit_elapsed(36_500 * 86_400, 9), "36500d0h");
+        assert_eq!(fit_elapsed(36_500 * 86_400, 9), "36500d00h");
         // u64::MAX seconds is 213503982334601 days: past the nominal width, so
         // the leading digits are what survives.
         assert_eq!(fit_elapsed(u64::MAX, 9), "213503982");
