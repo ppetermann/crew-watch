@@ -125,7 +125,8 @@ pub fn fit_cpu(pct: f64, width: usize) -> String {
 }
 
 /// Fit an elapsed duration into `width`: `38:23:40` → `38:23` → `38h` →
-/// leading digits. Sub-hour durations drop to `{m}m` the same way.
+/// leading digits. Sub-hour durations drop to `{m}m` the same way. Days-form
+/// durations (`41d16h`, from 1000 hours on) drop the hours first: `41d`.
 pub fn fit_elapsed(secs: u64, width: usize) -> String {
     let full = format_duration(secs);
     if full.chars().count() <= width {
@@ -133,6 +134,13 @@ pub fn fit_elapsed(secs: u64, width: usize) -> String {
     }
     let h = secs / 3600;
     let m = (secs % 3600) / 60;
+    if h >= 1000 {
+        let days = format!("{}d", secs / 86_400);
+        if days.chars().count() <= width {
+            return days;
+        }
+        return keep_leading(&days, width);
+    }
     if h > 0 {
         let hm = format!("{}:{:02}", h, m);
         if hm.chars().count() <= width {
@@ -321,6 +329,31 @@ mod tests {
     }
 
     #[test]
+    fn elapsed_ladder_switches_to_days_at_1000_hours() {
+        // 999:59:59 is the last H:MM:SS value and fills the nominal width.
+        let last = 999 * 3600 + 59 * 60 + 59;
+        assert_eq!(fit_elapsed(last, 9), "999:59:59");
+        // 1000 hours would be `1000:00:00`, one character too wide.
+        let first_days = 1000 * 3600;
+        assert_eq!(fit_elapsed(first_days, 9), "41d16h");
+        assert_eq!(fit_elapsed(first_days, 6), "41d16h");
+        // No room for the hours: keep the days, the magnitude that matters.
+        assert_eq!(fit_elapsed(first_days, 5), "41d");
+        assert_eq!(fit_elapsed(first_days, 3), "41d");
+        assert_eq!(fit_elapsed(first_days, 2), "41");
+    }
+
+    #[test]
+    fn elapsed_ladder_handles_very_large_durations() {
+        // 1007 hours is `41d23h`; a century of runtime is `36500d0h`.
+        assert_eq!(fit_elapsed(1007 * 3600, 9), "41d23h");
+        assert_eq!(fit_elapsed(36_500 * 86_400, 9), "36500d0h");
+        // u64::MAX seconds is 213503982334601 days: past the nominal width, so
+        // the leading digits are what survives.
+        assert_eq!(fit_elapsed(u64::MAX, 9), "213503982");
+    }
+
+    #[test]
     fn cpu_ladder_drops_the_decimal_before_a_digit() {
         assert_eq!(fit_cpu(131.8, 9), "131.8%");
         assert_eq!(fit_cpu(131.8, 6), "131.8%");
@@ -346,6 +379,8 @@ mod tests {
             fit_elapsed(999 * 3600 + 59 * 60 + 59, w[ELAPSED] as usize),
             "999:59:59"
         );
+        // 1000 hours, the first duration past H:MM:SS, about 41 days + 16 hours.
+        assert_eq!(fit_elapsed(1000 * 3600, w[ELAPSED] as usize), "41d16h");
         assert_eq!(fit_cpu(1234.5, w[CPU] as usize), "1234.5%");
         // 1023.9 GiB, the largest value still shown in GiB.
         let kib = (1023.9 * 1_048_576.0) as u64;
@@ -368,7 +403,17 @@ mod tests {
         // ratatui is ever wider than the column it goes into, at any terminal
         // width, so alignment never truncates from the left.
         let pids = [1, 42, 827_115, i32::MAX];
-        let elapsed = [0, 5, 125, 3725, 38 * 3600 + 23 * 60 + 40, 900 * 3600];
+        let elapsed = [
+            0,
+            5,
+            125,
+            3725,
+            38 * 3600 + 23 * 60 + 40,
+            999 * 3600 + 59 * 60 + 59,
+            1000 * 3600,
+            900 * 3600,
+            u64::MAX,
+        ];
         let cpus = [0.0, 2.0, 31.8, 131.8, 1600.0];
         let mems = [0, 512, 868_966, 12_884_901, 3_221_225_472];
         for area_width in 1u16..=200 {

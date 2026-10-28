@@ -36,6 +36,7 @@ use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
+use crate::agent_cols::{fit_elapsed, AGENT_FIXED_COL_WIDTHS};
 use crate::app::App;
 use crate::cli::Cli;
 use crate::quota::{spawn_poller, QuotaFetch};
@@ -250,6 +251,8 @@ fn resolve_fm_home(arg: Option<PathBuf>) -> PathBuf {
 /// Fixed-width prefix of an agent row in `--once` output: every column before
 /// TASK plus the separating spaces.
 const ONCE_TASK_PREFIX_WIDTH: usize = 77;
+/// ELAPSED's fixed column width, the same one the TUI fits its values into.
+const ONCE_ELAPSED_WIDTH: usize = AGENT_FIXED_COL_WIDTHS[4] as usize;
 
 /// Header line of the agent table in `--once` output. Column *alignment*
 /// mirrors the TUI table (src/ui.rs): numeric columns — PID, ELAPSED, CPU%,
@@ -278,14 +281,14 @@ fn once_agent_row(
     rss_kib: u64,
     task: &str,
 ) -> String {
-    use crate::format_util::{format_duration, format_kib, format_percent};
+    use crate::format_util::{format_kib, format_percent};
     format!(
         "{:<7} {:<10} {:<20.20} {:>7} {:>9} {:>7} {:>9}  {}",
         state,
         kind,
         model,
         pid,
-        format_duration(elapsed_secs),
+        fit_elapsed(elapsed_secs, ONCE_ELAPSED_WIDTH),
         format_percent(cpu_percent),
         format_kib(rss_kib),
         task
@@ -497,6 +500,27 @@ mod tests {
         );
         assert_eq!(right_edge(&header, "CPU%"), right_edge(&long, "31.8%"));
         assert_eq!(right_edge(&header, "MEM"), right_edge(&long, "687.8MiB"));
+    }
+
+    #[test]
+    fn once_elapsed_column_stays_within_its_width_at_every_duration() {
+        let header = once_agent_header();
+        // 999:59:59 is the last H:MM:SS value; 1000 hours switches to days.
+        for (secs, shown) in [
+            (999 * 3600 + 59 * 60 + 59, "999:59:59"),
+            (1000 * 3600, "41d16h"),
+            (1007 * 3600, "41d23h"),
+        ] {
+            let row = once_agent_row("busy", "claude", "-", 1, secs, 0.0, 0, "task");
+            assert!(row.contains(shown), "{row}");
+            assert_eq!(right_edge(&row, shown), right_edge(&header, "ELAPSED"));
+        }
+        // No duration, however large, pushes the row past its column.
+        let row = once_agent_row("busy", "claude", "-", 1, u64::MAX, 0.0, 0, "task");
+        assert_eq!(
+            right_edge(&row, "213503982"),
+            right_edge(&header, "ELAPSED")
+        );
     }
 
     #[test]
