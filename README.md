@@ -132,7 +132,7 @@ reports, memory and swap bars with used/total figures, task count, load average
 | `RUNTIME` | Which agent runtime it is: `claude`, `opencode`, `codex`, … |
 | `MODEL` | The model it was started with, read from its `--model` argument with the provider prefix stripped for compactness (`zai-coding-plan/glm-5.3` → `glm-5.3`). `-` when there is no model flag, e.g. an interactive session. |
 | `PID` | The session's root agent process. |
-| `ELAPSED` | How long that process has been running. |
+| `ELAPSED` | How long that process has been running: `H:MM:SS`, switching to days form (`41d16h`) from 1000 hours on. |
 | `CPU%` | Aggregated over the agent's whole process subtree, normalized so one core = 100%. A multi-core subtree can exceed 100%, exactly as in htop. |
 | `MEM` | Resident memory, likewise aggregated over the subtree. |
 | `TASK` | A one-line description of what the agent is working on (see [Task descriptions](#task-descriptions)). |

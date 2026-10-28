@@ -16,12 +16,15 @@ pub fn format_kib(kib: u64) -> String {
 }
 
 /// Format an elapsed duration in seconds as htop-style `H:MM:SS` (or `M:SS`,
-/// or `Ns` for very short durations).
+/// or `Ns` for very short durations). From 1000 hours on, `H:MM:SS` needs a
+/// fourth hour digit, so the duration switches to `{d}d{h}h` (`41d16h`).
 pub fn format_duration(secs: u64) -> String {
     let h = secs / 3600;
     let m = (secs % 3600) / 60;
     let s = secs % 60;
-    if h > 0 {
+    if h >= 1000 {
+        format!("{}d{}h", secs / 86_400, (secs % 86_400) / 3600)
+    } else if h > 0 {
         format!("{}:{:02}:{:02}", h, m, s)
     } else if m > 0 {
         format!("{}:{:02}", m, s)
@@ -137,6 +140,12 @@ mod tests {
         assert_eq!(format_duration(5), "5s");
         assert_eq!(format_duration(65), "1:05");
         assert_eq!(format_duration(3725), "1:02:05");
+        // The largest H:MM:SS value is 9 characters, the nominal ELAPSED width.
+        assert_eq!(format_duration(999 * 3600 + 59 * 60 + 59), "999:59:59");
+        // 1000 hours is the first duration that needs a fourth hour digit.
+        assert_eq!(format_duration(1000 * 3600), "41d16h");
+        assert_eq!(format_duration(1007 * 3600), "41d23h");
+        assert_eq!(format_duration(1008 * 3600), "42d0h");
     }
 
     #[test]
