@@ -30,7 +30,7 @@ use crate::format_util::{format_duration, format_kib, format_percent};
 /// at a terminal wide enough to hold them (STATE, RUNTIME, MODEL, PID,
 /// ELAPSED, CPU%, MEM). STATE is two cells: exactly one wide emoji glyph
 /// (see [`crate::activity`]); at one cell it degrades to the ASCII fallback.
-pub const AGENT_FIXED_COL_WIDTHS: [u16; 7] = [2, 10, 14, 8, 10, 9, 12];
+pub const AGENT_FIXED_COL_WIDTHS: [u16; 7] = [2, 10, 20, 8, 9, 7, 9];
 /// Blank columns ratatui inserts between two adjacent table columns.
 pub const AGENT_COL_SPACING: u16 = 1;
 /// TASK is never squeezed out entirely: it keeps at least this much even when
@@ -330,6 +330,26 @@ mod tests {
         assert_eq!(fit_cpu(131.8, 2), "13");
         assert_eq!(fit_cpu(2.0, 4), "2.0%");
         assert_eq!(fit_cpu(2.0, 3), "2%");
+    }
+
+    #[test]
+    fn nominal_widths_show_the_largest_common_values_in_full() {
+        const MODEL: usize = 2;
+        const ELAPSED: usize = 4;
+        const CPU: usize = 5;
+        const MEM: usize = 6;
+        let w = AGENT_FIXED_COL_WIDTHS;
+        // `--model claude-opus-5-5[1m]` with its provider prefix stripped.
+        assert!(w[MODEL] >= "claude-opus-5-5[1m]".len() as u16);
+        // 999:59:59, about 41 days of runtime.
+        assert_eq!(
+            fit_elapsed(999 * 3600 + 59 * 60 + 59, w[ELAPSED] as usize),
+            "999:59:59"
+        );
+        assert_eq!(fit_cpu(1234.5, w[CPU] as usize), "1234.5%");
+        // 1023.9 GiB, the largest value still shown in GiB.
+        let kib = (1023.9 * 1_048_576.0) as u64;
+        assert_eq!(fit_mem(kib, w[MEM] as usize), "1023.9GiB");
     }
 
     #[test]

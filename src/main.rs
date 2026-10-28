@@ -260,7 +260,7 @@ const ONCE_TASK_PREFIX_WIDTH: usize = 77;
 /// display width (see [`crate::activity::Activity::once_label`]).
 fn once_agent_header() -> String {
     format!(
-        "{:<7} {:<10} {:<14} {:>7} {:>10} {:>9} {:>12}  TASK",
+        "{:<7} {:<10} {:<20} {:>7} {:>9} {:>7} {:>9}  TASK",
         "STATE", "RUNTIME", "MODEL", "PID", "ELAPSED", "CPU%", "MEM"
     )
 }
@@ -280,7 +280,7 @@ fn once_agent_row(
 ) -> String {
     use crate::format_util::{format_duration, format_kib, format_percent};
     format!(
-        "{:<7} {:<10} {:<14.14} {:>7} {:>10} {:>9} {:>12}  {}",
+        "{:<7} {:<10} {:<20.20} {:>7} {:>9} {:>7} {:>9}  {}",
         state,
         kind,
         model,
@@ -497,6 +497,24 @@ mod tests {
         );
         assert_eq!(right_edge(&header, "CPU%"), right_edge(&long, "31.8%"));
         assert_eq!(right_edge(&header, "MEM"), right_edge(&long, "687.8MiB"));
+    }
+
+    #[test]
+    fn once_model_column_keeps_the_longest_common_model_whole() {
+        // `--model claude-opus-5-5[1m]`, provider prefix already stripped.
+        let row = once_agent_row(
+            "busy",
+            "claude",
+            "claude-opus-5-5[1m]",
+            1,
+            0,
+            0.0,
+            0,
+            "task",
+        );
+        assert!(row.starts_with("busy    claude     claude-opus-5-5[1m] "));
+        // MODEL is left-aligned: the header and the value share a start column.
+        assert_eq!(once_agent_header().find("MODEL"), row.find("claude-opus"));
     }
 
     #[test]
