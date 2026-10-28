@@ -36,7 +36,7 @@ use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use crate::agent_cols::{fit_elapsed, AGENT_FIXED_COL_WIDTHS};
+use crate::agent_cols::fit_elapsed;
 use crate::app::App;
 use crate::cli::Cli;
 use crate::quota::{spawn_poller, QuotaFetch};
@@ -251,8 +251,10 @@ fn resolve_fm_home(arg: Option<PathBuf>) -> PathBuf {
 /// Fixed-width prefix of an agent row in `--once` output: every column before
 /// TASK plus the separating spaces.
 const ONCE_TASK_PREFIX_WIDTH: usize = 77;
-/// ELAPSED's fixed column width, the same one the TUI fits its values into.
-const ONCE_ELAPSED_WIDTH: usize = AGENT_FIXED_COL_WIDTHS[4] as usize;
+/// ELAPSED's column width in `--once` output: a surface-local width like the
+/// others in [`once_agent_header`], not the TUI's. Nine cells hold `999:59:59`
+/// and `41d16h`.
+const ONCE_ELAPSED_WIDTH: usize = 9;
 
 /// Header line of the agent table in `--once` output. Column *alignment*
 /// mirrors the TUI table (src/ui.rs): numeric columns — PID, ELAPSED, CPU%,
@@ -263,8 +265,15 @@ const ONCE_ELAPSED_WIDTH: usize = AGENT_FIXED_COL_WIDTHS[4] as usize;
 /// display width (see [`crate::activity::Activity::once_label`]).
 fn once_agent_header() -> String {
     format!(
-        "{:<7} {:<10} {:<20} {:>7} {:>9} {:>7} {:>9}  TASK",
-        "STATE", "RUNTIME", "MODEL", "PID", "ELAPSED", "CPU%", "MEM"
+        "{:<7} {:<10} {:<20} {:>7} {:>elapsed$} {:>7} {:>9}  TASK",
+        "STATE",
+        "RUNTIME",
+        "MODEL",
+        "PID",
+        "ELAPSED",
+        "CPU%",
+        "MEM",
+        elapsed = ONCE_ELAPSED_WIDTH
     )
 }
 
@@ -283,7 +292,7 @@ fn once_agent_row(
 ) -> String {
     use crate::format_util::{format_kib, format_percent};
     format!(
-        "{:<7} {:<10} {:<20.20} {:>7} {:>9} {:>7} {:>9}  {}",
+        "{:<7} {:<10} {:<20.20} {:>7} {:>elapsed$} {:>7} {:>9}  {}",
         state,
         kind,
         model,
@@ -291,7 +300,8 @@ fn once_agent_row(
         fit_elapsed(elapsed_secs, ONCE_ELAPSED_WIDTH),
         format_percent(cpu_percent),
         format_kib(rss_kib),
-        task
+        task,
+        elapsed = ONCE_ELAPSED_WIDTH
     )
 }
 
@@ -516,11 +526,10 @@ mod tests {
             assert_eq!(right_edge(&row, shown), right_edge(&header, "ELAPSED"));
         }
         // No duration, however large, pushes the row past its column.
+        // A value wider than its slot would push TASK right, so TASK's start
+        // column catches an over-wide ELAPSED that a prefix match would miss.
         let row = once_agent_row("busy", "claude", "-", 1, u64::MAX, 0.0, 0, "task");
-        assert_eq!(
-            right_edge(&row, "213503982"),
-            right_edge(&header, "ELAPSED")
-        );
+        assert_eq!(row.find("task"), Some(ONCE_TASK_PREFIX_WIDTH));
     }
 
     #[test]
