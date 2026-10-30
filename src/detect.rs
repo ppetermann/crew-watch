@@ -1,7 +1,7 @@
 //! Agent-runtime detection and per-session subtree aggregation.
 //!
 //! Detection is a single table ([`AGENT_KINDS`]) of patterns matched against a
-//! process's command name (basename of argv[0], with a fallback through known
+//! process's command name (basename of `argv[0]`, with a fallback through known
 //! interpreters like `node`). Adding a new runtime is one table row.
 //!
 //! Aggregation attributes every process to its *nearest enclosing agent*:
@@ -95,8 +95,8 @@ fn basename(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// Build candidate command basenames from argv. Includes argv[0]'s basename,
-/// and when argv[0] is an interpreter, the first following non-flag argument's
+/// Build candidate command basenames from argv. Includes `argv[0]`'s basename,
+/// and when `argv[0]` is an interpreter, the first following non-flag argument's
 /// basename too.
 pub fn extract_candidates(cmdline: &[String]) -> Vec<String> {
     let mut out = Vec::new();
@@ -141,6 +141,8 @@ pub struct Session {
     pub cpu_percent: f64,
     /// Aggregated resident memory in KiB over the attributed subtree.
     pub rss_kib: u64,
+    /// Processes attributed to this session besides its root agent process.
+    pub children: usize,
     /// Elapsed seconds of the session's root agent process.
     pub elapsed_secs: u64,
     /// Resolved one-line "what is it working on" text (filled by the caller
@@ -219,11 +221,15 @@ pub fn build_sessions(curr: &Snapshot, prev: Option<&Snapshot>) -> Vec<Session> 
     //    per owner.
     let mut rss: HashMap<i32, u64> = HashMap::new();
     let mut ticks: HashMap<i32, u64> = HashMap::new();
+    let mut children: HashMap<i32, usize> = HashMap::new();
     for (&pid, entry) in &curr.procs {
         let Some(&owner) = owner_of.get(&pid) else {
             continue;
         };
         *rss.entry(owner).or_default() += entry.stat.rss_kib();
+        if pid != owner {
+            *children.entry(owner).or_default() += 1;
+        }
         if let Some(p) = prev {
             if let Some(pe) = p.procs.get(&pid) {
                 let d = entry
@@ -273,6 +279,7 @@ pub fn build_sessions(curr: &Snapshot, prev: Option<&Snapshot>) -> Vec<Session> 
             pid,
             cpu_percent,
             rss_kib: rss.get(&pid).copied().unwrap_or(0),
+            children: children.get(&pid).copied().unwrap_or(0),
             elapsed_secs,
             task: String::new(),
             task_project: None,
@@ -425,6 +432,8 @@ mod tests {
         assert_eq!(s.pid, 1);
         // rss: 1024 + 512 + 512 pages * 4 KiB
         assert_eq!(s.rss_kib, (1024 + 512 + 512) * 4);
+        // cargo and cc, the whole subtree below the root.
+        assert_eq!(s.children, 2);
         // delta = 10 per pid * 3 pids = 30; total_delta = 8*(2000-1000) = 8000;
         // 2 cores -> 30 / 8000 * 100 * 2 = 0.75%
         assert!((s.cpu_percent - 0.75).abs() < 1e-6, "got {}", s.cpu_percent);
@@ -452,6 +461,9 @@ mod tests {
         // opencode owns {1,2}; claude owns {5,6}. Ancestor does NOT include child agent.
         assert_eq!(oc.rss_kib, (1024 + 512) * 4);
         assert_eq!(cl.rss_kib, (1024 + 512) * 4);
+        // The nested agent is not one of its ancestor's children.
+        assert_eq!(oc.children, 1);
+        assert_eq!(cl.children, 1);
     }
 
     #[test]

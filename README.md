@@ -302,6 +302,30 @@ In `--once` the same data prints bar-free, one line per provider:
 quota claude   session 34% 2h24m  week 61% 3d7h  fable 22% 3d7h
 ```
 
+## Use as a library
+
+Since 0.4.0 the crate is also a library, `crew_watch`, with the data behind the
+TUI: the process snapshot, agent detection with subtree CPU/memory, and the
+firstmate task, activity and PR-poll reads. Turn off the default `tui` feature
+so the terminal UI and its dependencies are not compiled:
+
+```toml
+[dependencies]
+crew-watch = { version = "0.4", default-features = false }
+```
+
+Point a `crew_watch::fleet::Sampler` at a firstmate home (any home: the library
+has no default path) and call `sample()` on an interval for a serializable
+snapshot of the system and every agent session. The
+[crate documentation](https://docs.rs/crew-watch/latest/crew_watch/) has a
+runnable example.
+
+Each `sample()` reads the system once, with blocking filesystem I/O, so run it
+off an async runtime's worker threads. CPU figures are measured between two
+samples, so the first one reads 0%. Every row carries the raw stamps behind its `STATE` (the last status
+line's verb and `[at=]` time, the turn record's `ts=`) so a caller can judge
+staleness itself, plus the pull request firstmate's merge poll is armed for.
+
 ## Requirements
 
 - **Linux or macOS.** On Linux, `crew-watch` reads `/proc` directly. On macOS,

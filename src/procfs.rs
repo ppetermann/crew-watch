@@ -5,10 +5,9 @@
 //! (no panic) when a `/proc` entry vanishes mid-read.
 
 use std::collections::HashMap;
-// The Linux parsers below stay compiled on every platform (their unit tests
-// run in the macOS CI job too), but on macOS the sysinfo backend replaces
-// `collect`, so they are unused in the macOS bin compilation. Allow just
-// that cfg combination; behavior is identical everywhere.
+// On macOS the sysinfo backend replaces `collect`, the only reader of the
+// filesystem here; the parsers stay compiled (and public) on every platform,
+// so their unit tests run in the macOS CI job too.
 #[cfg_attr(target_os = "macos", allow(unused_imports))]
 use std::fs;
 use std::path::PathBuf;
@@ -107,7 +106,6 @@ pub struct Snapshot {
 /// Parse `/proc/<pid>/stat`. `pid` is the directory pid (used as a fallback);
 /// the pid encoded in the file is authoritative. Returns `None` if the line is
 /// malformed (e.g. the process exited and the kernel recycled the entry).
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_proc_pid_stat(pid: i32, content: &str) -> Option<ProcStat> {
     let open = content.find('(')?;
     let close = content.rfind(')')?;
@@ -128,13 +126,11 @@ pub fn parse_proc_pid_stat(pid: i32, content: &str) -> Option<ProcStat> {
     .map(|s| if s.pid == 0 { ProcStat { pid, ..s } } else { s })
 }
 
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn get_idx(rest: &[&str], i: usize) -> Option<i32> {
     rest.get(i).and_then(|s| s.parse().ok())
 }
 
 /// Parse `/proc/<pid>/cmdline` (NUL-separated argv).
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_cmdline(bytes: &[u8]) -> Vec<String> {
     bytes
         .split(|&b| b == 0)
@@ -145,7 +141,6 @@ pub fn parse_cmdline(bytes: &[u8]) -> Vec<String> {
 
 /// Parse `/proc/stat`. Returns every `cpu*` line (aggregate first in kernel
 /// output, but not assumed) plus `btime` if present.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_proc_stat(content: &str) -> (Vec<CpuLine>, Option<u64>) {
     let mut cpus = Vec::new();
     let mut btime = None;
@@ -168,7 +163,6 @@ pub fn parse_proc_stat(content: &str) -> (Vec<CpuLine>, Option<u64>) {
 }
 
 /// Parse `/proc/meminfo`.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_meminfo(content: &str) -> MemInfo {
     let mut m = MemInfo::default();
     for line in content.lines() {
@@ -193,7 +187,6 @@ pub fn parse_meminfo(content: &str) -> MemInfo {
 }
 
 /// Parse `/proc/loadavg`: `1m 5m 15m running/total pid`.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_loadavg(content: &str) -> Option<LoadAvg> {
     let mut it = content.split_whitespace();
     let one = it.next()?.parse::<f64>().ok()?;
@@ -214,7 +207,6 @@ pub fn parse_loadavg(content: &str) -> Option<LoadAvg> {
 }
 
 /// Parse `/proc/uptime` (first field, seconds since boot).
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_uptime(content: &str) -> Option<Uptime> {
     let secs = content.split_whitespace().next()?.parse::<f64>().ok()?;
     Some(Uptime { secs })
@@ -268,9 +260,67 @@ pub fn collect() -> Snapshot {
 #[cfg(target_os = "macos")]
 pub use crate::macos::collect;
 
+/// Busy percentage of each core (aggregate `cpu` line excluded, in snapshot
+/// order) over the interval between `prev` and `curr`. A core with no
+/// previous sample, or no elapsed jiffies, reads 0.
+pub fn core_percents(curr: &Snapshot, prev: Option<&Snapshot>) -> Vec<f64> {
+    let cores: Vec<&CpuLine> = curr.cpus.iter().filter(|c| !c.is_aggregate()).collect();
+    let prev_map: HashMap<&str, &CpuLine> = prev
+        .map(|p| {
+            p.cpus
+                .iter()
+                .filter(|c| !c.is_aggregate())
+                .map(|c| (c.name.as_str(), c))
+                .collect()
+        })
+        .unwrap_or_default();
+    cores
+        .iter()
+        .map(|c| {
+            let Some(p) = prev_map.get(c.name.as_str()) else {
+                return 0.0;
+            };
+            let total_d = c.total().saturating_sub(p.total());
+            if total_d == 0 {
+                return 0.0;
+            }
+            let idle_d = c.idle().saturating_sub(p.idle());
+            let busy_d = total_d.saturating_sub(idle_d);
+            (busy_d as f64 / total_d as f64) * 100.0
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cpu(name: &str, busy: u64, idle: u64) -> CpuLine {
+        CpuLine {
+            name: name.to_string(),
+            fields: vec![busy, 0, 0, idle, 0],
+        }
+    }
+
+    #[test]
+    fn core_percents_skip_the_aggregate_and_need_a_previous_sample() {
+        let prev = Snapshot {
+            cpus: vec![cpu("cpu", 0, 0), cpu("cpu0", 100, 100), cpu("cpu1", 0, 0)],
+            ..Snapshot::default()
+        };
+        let curr = Snapshot {
+            cpus: vec![
+                cpu("cpu", 0, 0),
+                cpu("cpu0", 175, 125),
+                cpu("cpu1", 0, 0),
+                cpu("cpu2", 50, 50),
+            ],
+            ..Snapshot::default()
+        };
+        // cpu0: 75 busy of 100; cpu1: no jiffies; cpu2: hot-plugged, no prev.
+        assert_eq!(core_percents(&curr, Some(&prev)), vec![75.0, 0.0, 0.0]);
+        assert_eq!(core_percents(&curr, None), vec![0.0, 0.0, 0.0]);
+    }
 
     #[test]
     fn stat_basic() {

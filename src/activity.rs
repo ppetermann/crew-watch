@@ -31,8 +31,12 @@
 use std::fs;
 use std::path::Path;
 
+use serde::Serialize;
+
 /// What an agent row is doing right now, as rendered in the STATE column.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Serializes as its kebab-case variant name (`busy`, `needs-decision`, ...).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Activity {
     /// Fleet task, lifecycle working, turn open (mid-turn).
     Busy,
@@ -126,48 +130,114 @@ pub fn fit_state(activity: Activity, width: usize) -> String {
 /// first `:` of the last non-empty line (`needs-decision [key=x]: ...` →
 /// `needs-decision`). `None` when no line parses.
 pub fn parse_status_verb(content: &str) -> Option<String> {
+    parse_status_line(content).map(|(verb, _)| verb)
+}
+
+/// Last status verb of a `.status` log plus the line's `[at=<epoch>]` stamp
+/// (`paused [at=1793381955]: ...` → `("paused", Some(1793381955))`). The
+/// verb is read as [`parse_status_verb`] reads it; the stamp as
+/// [`parse_status_at`] does.
+pub fn parse_status_line(content: &str) -> Option<(String, Option<u64>)> {
     let line = content.lines().rev().find(|l| !l.trim().is_empty())?;
     let head = line.split(':').next()?;
-    let verb = head.split_whitespace().next()?;
-    Some(verb.to_string())
+    let verb = head.split_whitespace().next()?.to_string();
+    Some((verb, parse_status_at(line)))
+}
+
+/// The `[at=<epoch>]` emission stamp of one status line, ported from the
+/// grammar's owner, firstmate's `_fm_status_at_epoch` in
+/// `bin/fm-classify-lib.sh`: the stamp sits in the head before the line's
+/// first `:` (a line without one has none), runs from the first `[at=` to the
+/// next `]`, and is canonical unsigned decimal of at most 12 digits (no
+/// leading zero). A malformed or duplicated stamp means unknown time: `None`.
+pub fn parse_status_at(line: &str) -> Option<u64> {
+    let (head, _) = line.split_once(':')?;
+    let rest = &head[head.find("[at=")? + "[at=".len()..];
+    let (value, after) = rest.split_once(']')?;
+    if after.contains("[at=")
+        || value.is_empty()
+        || value.len() > 12
+        || !value.bytes().all(|b| b.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return None;
+    }
+    value.parse().ok()
+}
+
+/// A well-formed, gen-valid firstmate busy-state record: the turn state
+/// (`None` for the contract's `unknown`) and its `ts=` stamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BusyRecord {
+    pub busy: Option<bool>,
+    pub ts: u64,
 }
 
 /// Parse a firstmate busy-state record against its armed gen. Returns the
 /// turn state only for a well-formed `v1` record whose gen matches;
-/// everything else — missing gen, version drift, stale gen, unknown state
-/// token, extra lines — is `None` (unknown), mirroring fm-busy-lib.sh's
-/// "never idle on bad data" rule.
+/// everything else — missing gen, version drift, stale gen, malformed
+/// record — is `None` (unknown), mirroring fm-busy-lib.sh's "never idle on
+/// bad data" rule.
 pub fn parse_busy_state(record: &str, armed_gen: Option<&str>) -> Option<bool> {
+    parse_busy_record(record, armed_gen)?.busy
+}
+
+/// Parse a firstmate busy-state record against its armed gen, keeping its
+/// `ts=` stamp. Ported from the grammar's owner, `fm_busy_record_read` in
+/// firstmate's `bin/fm-busy-lib.sh`: exactly one newline-terminated line of
+/// space-separated `v1` then only the `gen=`, `seq=`, `state=`, `source=`,
+/// `event=` and `ts=` fields; `gen`, `source` and `event` are
+/// `[A-Za-z0-9._-]+` tokens, `seq` and `ts` are digits, `state` is `busy`,
+/// `idle` or `unknown`. A record that breaks any rule, or whose gen is not the
+/// armed one, is `None`.
+pub fn parse_busy_record(record: &str, armed_gen: Option<&str>) -> Option<BusyRecord> {
     let armed = armed_gen?.trim();
     if armed.is_empty() {
         return None;
     }
-    let mut lines = record.lines().filter(|l| !l.trim().is_empty());
-    let line = lines.next()?;
-    if lines.next().is_some() {
+    let line = record.strip_suffix('\n')?;
+    if line.contains('\n') {
         return None; // the contract is exactly one line
     }
-    let mut fields = line.split_whitespace();
+    let mut fields = line.split(' ').filter(|f| !f.is_empty());
     if fields.next() != Some("v1") {
         return None;
     }
-    let mut gen = None;
-    let mut state = None;
+    let (mut gen, mut seq, mut state, mut source, mut event, mut ts) = ("", "", "", "", "", "");
     for f in fields {
-        if let Some(v) = f.strip_prefix("gen=") {
-            gen = Some(v);
-        } else if let Some(v) = f.strip_prefix("state=") {
-            state = Some(v);
+        let (key, value) = f.split_once('=')?;
+        match key {
+            "gen" => gen = value,
+            "seq" => seq = value,
+            "state" => state = value,
+            "source" => source = value,
+            "event" => event = value,
+            "ts" => ts = value,
+            _ => return None,
         }
     }
-    if gen? != armed {
+    let token = |v: &str| {
+        !v.is_empty()
+            && v.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    let digits = |v: &str| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit());
+    if !token(gen) || !token(source) || !token(event) || !digits(seq) || !digits(ts) {
         return None;
     }
-    match state? {
+    let busy = match state {
         "busy" => Some(true),
         "idle" => Some(false),
-        _ => None,
+        "unknown" => None,
+        _ => return None,
+    };
+    if gen != armed {
+        return None;
     }
+    Some(BusyRecord {
+        busy,
+        ts: ts.parse().ok()?,
+    })
 }
 
 /// Combine lifecycle verb and turn state into an [`Activity`] for a
@@ -188,20 +258,46 @@ pub fn classify(verb: Option<&str>, busy: Option<bool>) -> Activity {
     }
 }
 
+/// One fleet task's classified [`Activity`] plus the raw signals behind it,
+/// which a caller can use to judge staleness.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TaskState {
+    pub activity: Activity,
+    /// Verb of the last `.status` line.
+    pub status_verb: Option<String>,
+    /// `[at=<epoch>]` stamp of the last `.status` line.
+    pub status_at: Option<u64>,
+    /// `ts=` stamp of the gen-valid busy-state record.
+    pub busy_ts: Option<u64>,
+}
+
 /// Read and classify the activity for one fleet task under a firstmate
 /// home's `state/` dir, keyed by the task's meta filename stem. Best-effort:
 /// any unreadable file degrades that signal, never errors.
 pub fn load_activity(fm_home: &Path, stem: &str) -> Activity {
+    load_task_state(fm_home, stem).activity
+}
+
+/// [`load_activity`] keeping the status and busy-state stamps it read.
+pub fn load_task_state(fm_home: &Path, stem: &str) -> TaskState {
     let state = fm_home.join("state");
     let status = fs::read_to_string(state.join(format!("{stem}.status"))).ok();
-    let verb = status.as_deref().and_then(parse_status_verb);
+    let (status_verb, status_at) = match status.as_deref().and_then(parse_status_line) {
+        Some((verb, at)) => (Some(verb), at),
+        None => (None, None),
+    };
     let record = fs::read_to_string(state.join(format!("{stem}.busy-state"))).ok();
     let gen = fs::read_to_string(state.join(format!("{stem}.busy-gen"))).ok();
     let busy = match (record.as_deref(), gen.as_deref()) {
-        (Some(r), g) => parse_busy_state(r, g.map(str::trim)),
+        (Some(r), g) => parse_busy_record(r, g.map(str::trim)),
         _ => None,
     };
-    classify(verb.as_deref(), busy)
+    TaskState {
+        activity: classify(status_verb.as_deref(), busy.and_then(|b| b.busy)),
+        status_verb,
+        status_at,
+        busy_ts: busy.map(|b| b.ts),
+    }
 }
 
 #[cfg(test)]
@@ -274,6 +370,63 @@ mod tests {
         assert_eq!(parse_status_verb("\n\n"), None);
     }
 
+    #[test]
+    fn status_line_reads_the_at_stamp_beside_other_tokens() {
+        let log = "working [at=1793381000]: setup\n\
+                   needs-decision [at=1793381955] [key=api-shape]: REST or RPC?\n";
+        assert_eq!(
+            parse_status_line(log),
+            Some(("needs-decision".to_string(), Some(1_793_381_955)))
+        );
+        let resolved = "resolved [key=api-shape] [at=1793382000]: RPC\n";
+        assert_eq!(
+            parse_status_line(resolved),
+            Some(("resolved".to_string(), Some(1_793_382_000)))
+        );
+        // firstmate matches the stamp as a substring, not a whole token.
+        assert_eq!(
+            parse_status_at("working [at=1793381955][key=x]: glued"),
+            Some(1_793_381_955)
+        );
+        // A lone zero is canonical decimal; twelve digits is the ceiling.
+        assert_eq!(parse_status_at("working [at=0]: zero"), Some(0));
+        assert_eq!(
+            parse_status_at("working [at=999999999999]: max"),
+            Some(999_999_999_999)
+        );
+    }
+
+    #[test]
+    fn status_line_without_a_plain_digit_stamp_has_no_time() {
+        for log in [
+            "working: no stamp\n",
+            "working [at=<epoch>]: unsubstituted\n",
+            "working [at=]: empty\n",
+            "working [at=-5]: signed\n",
+            "working [at=+5]: plus\n",
+            // Duplicate stamps mean unknown time, even when they agree.
+            "working [at=1] [at=2]: dup\n",
+            "working [at=7] [at=7]: same\n",
+            "working [at=0123]: leading zero\n",
+            "working [at=1234567890123]: thirteen digits\n",
+            "working [at=17933 81955]: space\n",
+            "working [at=1793381955: unclosed\n",
+            // No colon: firstmate reads no stamp from such a line.
+            "working [at=1793381955]\n",
+        ] {
+            assert_eq!(
+                parse_status_line(log),
+                Some(("working".to_string(), None)),
+                "{log:?}"
+            );
+        }
+        // A stamp in the message body (after the first colon) is not the line's.
+        assert_eq!(
+            parse_status_line("done: was [at=1793381955]\n"),
+            Some(("done".to_string(), None))
+        );
+    }
+
     // --- busy-state parsing ---
 
     #[test]
@@ -300,6 +453,94 @@ mod tests {
         assert_eq!(parse_busy_state(&record("busy"), Some("")), None);
         let v2 = record("busy").replace("v1 ", "v2 ");
         assert_eq!(parse_busy_state(&v2, Some(GEN)), None);
+    }
+
+    #[test]
+    fn busy_record_keeps_its_ts_and_survives_an_unknown_state() {
+        assert_eq!(
+            parse_busy_record(&record("busy"), Some(GEN)),
+            Some(BusyRecord {
+                busy: Some(true),
+                ts: 1_786_790_704
+            })
+        );
+        assert_eq!(
+            parse_busy_record(&record("unknown"), Some(GEN)),
+            Some(BusyRecord {
+                busy: None,
+                ts: 1_786_790_704
+            })
+        );
+        // A stale incarnation's stamp is not this task's.
+        assert_eq!(parse_busy_record(&record("busy"), Some("g999.1.1")), None);
+    }
+
+    #[test]
+    fn task_state_reads_status_and_busy_stamps() {
+        let home = std::env::temp_dir().join(format!(
+            "crew-watch-activity-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let state = home.join("state");
+        fs::create_dir_all(&state).unwrap();
+        fs::write(state.join("t.status"), "working [at=1786790700]: go\n").unwrap();
+        fs::write(state.join("t.busy-state"), record("idle")).unwrap();
+        fs::write(state.join("t.busy-gen"), format!("{GEN}\n")).unwrap();
+        assert_eq!(
+            load_task_state(&home, "t"),
+            TaskState {
+                activity: Activity::Waiting,
+                status_verb: Some("working".to_string()),
+                status_at: Some(1_786_790_700),
+                busy_ts: Some(1_786_790_704),
+            }
+        );
+        // Nothing on disk: the working-no-signal state and no stamps.
+        assert_eq!(
+            load_task_state(&home, "absent"),
+            TaskState {
+                activity: Activity::Working,
+                ..TaskState::default()
+            }
+        );
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn activity_serializes_as_its_kebab_case_name() {
+        assert_eq!(
+            serde_json::to_string(&Activity::NeedsDecision).unwrap(),
+            "\"needs-decision\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Activity::Unknown).unwrap(),
+            "\"unknown\""
+        );
+    }
+
+    #[test]
+    fn busy_record_rejects_what_firstmate_calls_malformed() {
+        let ok = record("busy");
+        for bad in [
+            ok.replace("ts=1786790704", "ts=+5"),
+            ok.replace("ts=1786790704", "ts=abc"),
+            ok.replace("ts=1786790704", "ts="),
+            ok.replace(" ts=1786790704", ""),
+            ok.replace("state=busy", "state=garbage"),
+            ok.replace("seq=2", "seq=x"),
+            ok.replace("source=claude-hook", "source=claude/hook"),
+            ok.replace("event=stop", "event="),
+            ok.replace(" event=stop", " event=stop extra=1"),
+            ok.replace(" event=stop", " event=stop bare"),
+            ok.trim_end().to_string(), // no terminating newline
+            format!("{ok}\n"),         // a second, empty line
+        ] {
+            assert_eq!(parse_busy_record(&bad, Some(GEN)), None, "{bad:?}");
+        }
     }
 
     #[test]

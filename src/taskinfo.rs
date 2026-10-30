@@ -36,8 +36,9 @@
 //! must reflect *current* on-disk state, not whatever was read when crew-watch
 //! launched — otherwise an agent spawned after launch inherits a path that, in
 //! a stale snapshot, still belongs to a task that finished hours ago, and gets
-//! rendered with that dead task's title at full confidence. [`crate::app::App`]
-//! therefore re-reads both sources from the firstmate home on every tick;
+//! rendered with that dead task's title at full confidence.
+//! [`crate::fleet::Sampler`] therefore re-reads both sources from the
+//! firstmate home on every refresh;
 //! [`crate::meta::load_fm_home`] and [`crate::titles::load_task_titles`] are
 //! best-effort, so a vanished source degrades to the lower layers instead of
 //! keeping a ghost label. The resolution logic itself is correct as written —

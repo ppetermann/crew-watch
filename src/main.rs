@@ -2,24 +2,16 @@
 //! render/tick event loop.
 
 mod about;
-mod activity;
 mod agent_cols;
 mod app;
 mod cli;
-mod config;
-mod detect;
-mod format_util;
-mod macos;
-mod meta;
-mod model;
-mod procfs;
-mod project;
-mod quota;
 mod quota_dialog;
 mod quota_row;
-mod taskinfo;
-mod titles;
 mod ui;
+
+// The data layer is the `crew_watch` library; importing its modules at the
+// crate root keeps every `crate::<module>` path in the TUI modules valid.
+use crew_watch::{activity, config, detect, fleet, format_util, procfs, quota, taskinfo};
 
 use std::io;
 use std::path::PathBuf;
@@ -365,7 +357,7 @@ fn print_once(app: &App) {
         format_uptime(snap.uptime.secs.max(0.0) as u64)
     );
 
-    if app.sessions.is_empty() {
+    if app.sessions().is_empty() {
         println!("agents: (none detected)");
     } else {
         println!("{}", once_agent_header());
@@ -382,7 +374,7 @@ fn print_once(app: &App) {
         } else {
             None
         };
-        for s in &app.sessions {
+        for s in app.sessions() {
             let model = if s.model.is_empty() {
                 "-".to_string()
             } else {

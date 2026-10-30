@@ -14,7 +14,10 @@ When updating this file, preserve this bar for all agents and keep entries conci
 ## crew-watch
 
 Rust TUI: htop-style system overview + a per-agent table (one row per running AI
-runtime, with subtree-aggregated CPU/mem). Linux and macOS.
+runtime, with subtree-aggregated CPU/mem). Linux and macOS. One crate, two
+targets: the `crew_watch` library (`src/lib.rs`, the data layer, public API since
+0.4.0) and the `crew-watch` binary behind the default `tui` feature
+(`required-features`; ratatui/crossterm/clap are optional deps of that feature).
 
 **Built for [firstmate](https://github.com/kunchenguid/firstmate)** (upstream —
 link that URL, never a fork, wherever firstmate is referenced). The `TASK` and
@@ -34,6 +37,7 @@ in `README.md`.
 
 - `cargo build --release` — binary at `target/release/crew-watch`.
 - `cargo test` — unit tests for the pure logic (parsing, detection, aggregation, meta, taskinfo, activity, quota). TUI rendering is intentionally untested in v1.
+- `cargo clippy --all-targets --no-default-features -- -D warnings` and `cargo test --no-default-features` — the library alone; CI runs both, so a lib module must never reach for a TUI module or dep.
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` must stay clean (CI gates on them).
 - `crew-watch --once` — non-interactive one-shot dump; the way to verify detection/CPU/mem outside a TTY.
 
@@ -43,7 +47,7 @@ The fleet-wide flow: branch → local ladder → DRAFT PR → ready-flip → one
 review round → merge. Drafts run no CI.
 
 - **Local ladder = the authoritative commands above**, in order: fmt --check, clippy
-  -D warnings, test. The Linux `check` job in `.github/workflows/ci.yml` runs these
+  -D warnings, test (each with and without `--no-default-features`). The Linux `check` job in `.github/workflows/ci.yml` runs these
   same commands; CI also cross-checks the darwin targets and runs clippy, test and a
   smoke test on macOS (`check-macos`), which the local ladder never compiles. When a
   change touches `src/macos/` or other cfg-gated code, also run
@@ -65,12 +69,15 @@ review round → merge. Drafts run no CI.
 
 ### Architecture map (pure logic is split from I/O and from rendering)
 
+Library modules (`src/lib.rs`): fleet, procfs, macos, detect, meta, prpoll, titles, taskinfo, model, project, activity, quota, config, format_util. Binary-only (`src/main.rs`, which `use`s the lib modules at its root so `crate::<module>` paths still resolve): app, ui, agent_cols, about, quota_dialog, quota_row, cli. A `pub` lib item is crates.io API.
+
+- `src/fleet.rs` — `Sampler`: the whole tick pipeline (fleet reload → `collect` → `build_sessions` → task/model/activity/PR resolution) as a library; `sample()` returns a serde `FleetSample` (`SystemStats` + `AgentRow`s). No default firstmate home in the lib — callers always pass it (the TUI's default lives in `main.rs`). `App::tick` is `sampler.refresh()`. `src/prpoll.rs` — `state/<stem>.pr-poll`: `fm-pr-poll.sh`'s five-line framing and number rule plus its provider/host/path shape and exact URL rebuild (not its full arm-time validation). The `[at=]` and busy-record parsers in `activity.rs` are ports of firstmate's owning parsers (`_fm_status_at_epoch`, `fm_busy_record_read`) — never be more lenient than the owner.
 - `src/procfs.rs` — pure parsers (`parse_proc_pid_stat`, `parse_proc_stat`, `parse_meminfo`, `parse_loadavg`, `parse_uptime`, `parse_cmdline`) + Linux `collect()` which reads `/proc` exactly once per tick; the `Snapshot` struct is the platform contract. `src/macos/` — macOS backend: `backend.rs` (`sysinfo`-based `collect`, mutex-guarded state on the tick thread) + `convert.rs` (pure, test-built on every platform: fabricates `/proc`-shaped cumulative `CpuLine` counters from per-core usage% — read its tests before touching the math).
 - `src/detect.rs` — `AGENT_KINDS` detection table, `extract_candidates`, `build_sessions` (subtree aggregation; nearest-enclosing-agent attribution so nested agents are separate rows excluded from ancestors).
-- `src/meta.rs` — firstmate `state/*.meta` parsing. `src/titles.rs` — backlog.md + brief.md title lookup. `src/taskinfo.rs` — layered `TASK` resolution (fleet title → cwd project → argv). `src/model.rs` — `--model` argv extraction. `src/project.rs` — git-repo project-name resolution from cwd (handles worktrees). `src/activity.rs` — STATE-column classification: parses firstmate's `state/<stem>.status` verb + gen-guarded `.busy-state`/`.busy-gen` turn record into one `Activity` (lifecycle verb beats turn state); glyphs are pinned to single Wide scalars (no VS16/ZWJ — widths disagree across unicode-width 0.1/0.2/wcwidth and shear the grid; test-enforced), `--once` uses words, not emoji.
+- `src/meta.rs` — firstmate `state/*.meta` parsing. `src/titles.rs` — backlog.md + brief.md title lookup. `src/taskinfo.rs` — layered `TASK` resolution (fleet title → cwd project → argv). `src/model.rs` — `--model` argv extraction. `src/project.rs` — git-repo project-name resolution from cwd (handles worktrees). `src/activity.rs` — STATE-column classification: parses firstmate's `state/<stem>.status` verb (+ `[at=]` stamp) + gen-guarded `.busy-state`/`.busy-gen` turn record (+ `ts=`) into one `Activity`/`TaskState` (lifecycle verb beats turn state; `Activity` serializes kebab-case); glyphs are pinned to single Wide scalars (no VS16/ZWJ — widths disagree across unicode-width 0.1/0.2/wcwidth and shear the grid; test-enforced), `--once` uses words, not emoji.
 - `src/quota.rs` — `quota-axi --json` parse (serde, schema-tolerant: reads both schema 3 windows, which carry `percentUsed`, and schema 5 (quota-axi ≥0.1.30) windows, which carry `percentRemaining` mapped to `100 − r`; whichever field is present wins, no version gate) + ISO-8601→epoch + background poller (`fetch_once`/`spawn_poller`, 10s kill-timeout, **never on the `/proc` tick path**). `src/quota_row.rs` — pure row builder: per-provider `build_provider_line` + multi-provider `build_quota_rows` (aligned block). Its two layout contracts — **canonical window order** and **aligned columns**, including how each degrades on a narrow terminal — are specified in that file's module header; read it before touching quota-row layout. `src/quota_dialog.rs` — provider-selection dialog (pure state machine over `KeyCode`). `src/config.rs` — `key=value` config file (`~/.config/crew-watch/config`, `quota_providers=`), same read-tolerance idiom as `meta.rs`.
 - `src/about.rs` — about overlay: dismiss-key semantics, width-wrapped identity content (version from `CARGO_PKG_VERSION`), centered geometry; a `show_about` view flag on `App`, never a mode.
-- `src/ui.rs` — ratatui rendering. `src/agent_cols.rs` — pure agent-table column geometry (`compressed_col_widths`, `task_width`) + per-value fitting for the right-aligned numeric columns; its module header explains why every such cell must be pre-fitted (ratatui truncates an over-width right-aligned line from the **left**, dropping the magnitude digits) — read it before touching agent-table widths or alignment. `src/format_util.rs` — human-readable formatting + the shared `make_bar`/`make_bar_min_one`/`format_reset` used by both the system meters and the quota row. `src/app.rs` — tick state; owns `fm_home` and re-reads fleet records + titles every tick (see the `src/taskinfo.rs` header for why that freshness is load-bearing); quota state is drained from the poller off the tick path. `src/cli.rs` — clap CLI. `src/main.rs` — entry point + event loop.
+- `src/ui.rs` — ratatui rendering. `src/agent_cols.rs` — pure agent-table column geometry (`compressed_col_widths`, `task_width`) + per-value fitting for the right-aligned numeric columns; its module header explains why every such cell must be pre-fitted (ratatui truncates an over-width right-aligned line from the **left**, dropping the magnitude digits) — read it before touching agent-table widths or alignment. `src/format_util.rs` — human-readable formatting + the shared `make_bar`/`make_bar_min_one`/`format_reset` used by both the system meters and the quota row. `src/app.rs` — TUI state: a `fleet::Sampler` (which re-reads fleet records + titles every refresh; see the `src/taskinfo.rs` header for why that freshness is load-bearing) plus quota/overlay state; quota is drained from the poller off the tick path. `src/cli.rs` — clap CLI. `src/main.rs` — entry point + event loop.
 
 ### Sharp edge: building on a host without gcc
 

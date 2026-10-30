@@ -17,12 +17,14 @@ I/O is a single `/proc` pass plus a handful of small best-effort file reads.
 
 | Module | Responsibility |
 |--------|----------------|
+| `src/fleet.rs` | the library entry point: `Sampler` runs one refresh (fleet reload, snapshot, sessions, resolution) and returns a serializable `FleetSample` |
 | `src/procfs.rs` | pure `/proc` parsers + `collect()`, which reads `/proc` exactly once per tick |
 | `src/detect.rs` | the `AGENT_KINDS` detection table, candidate extraction, and subtree aggregation into sessions |
 | `src/meta.rs` | firstmate `state/*.meta` record parsing |
 | `src/titles.rs` | task titles from `data/backlog.md` and `data/<task>/brief.md` |
 | `src/taskinfo.rs` | the layered `TASK` resolution |
 | `src/activity.rs` | `STATE` classification from the status verb and the turn record |
+| `src/prpoll.rs` | firstmate `state/<stem>.pr-poll` merge-poll sidecar parsing |
 | `src/model.rs` | `--model` extraction from argv |
 | `src/project.rs` | git-repository project name from a working directory |
 | `src/quota.rs` | quota report parsing and the background poller |
@@ -32,8 +34,14 @@ I/O is a single `/proc` pass plus a handful of small best-effort file reads.
 | `src/config.rs` | the `key=value` config file |
 | `src/agent_cols.rs` | agent-table column geometry and per-value fitting |
 | `src/format_util.rs` | human-readable formatting, bars, reset labels |
-| `src/app.rs` | per-tick state |
+| `src/app.rs` | the TUI's state: a `Sampler` plus quota and overlay state |
 | `src/ui.rs` | rendering |
+
+Every module in the table is part of the `crew_watch` library except the
+terminal ones — `quota_row`, `quota_dialog`, `about`, `agent_cols`, `app` and
+`ui` — which live in the binary behind the default `tui` feature. The library answers "what is running and what is it doing" and
+keeps the small text-fitting helpers its modules own (STATE glyphs, bars,
+task-line fitting); widgets, layout and terminal I/O are the binary's.
 
 Several of these modules carry a header comment stating a contract that is easy
 to break from the outside; `src/agent_cols.rs` and `src/quota_row.rs` in

@@ -8,12 +8,31 @@ cargo build --release                        # binary at target/release/crew-wat
 cargo test                                   # unit tests
 cargo fmt --all                              # format
 cargo clippy --all-targets -- -D warnings    # lint
+
+# the library alone, without the `tui` feature (no ratatui, crossterm, clap)
+cargo clippy --all-targets --no-default-features -- -D warnings
+cargo test --no-default-features
 ```
 
 CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs
 `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and
-`cargo test --all` on every pull request and on pushes to `main`. Both the
-format check and the lint are hard gates, so run them before pushing.
+`cargo test --all`, then the clippy and test steps again with
+`--no-default-features`, on every pull request and on pushes to `main`. Both
+the format check and the lint are hard gates, so run them before pushing.
+
+## Library and binary
+
+One crate, two targets. `src/lib.rs` is the `crew_watch` library: the data layer
+plus the small text-fitting helpers its modules own (STATE glyphs, bars,
+task-line fitting) and the config file, with `src/fleet.rs` (`Sampler`) as its
+entry point; widgets, layout and terminal I/O stay in the binary. The
+`crew-watch` binary (`src/main.rs`) requires the default `tui` feature and owns
+the terminal modules (`app`, `ui`, `agent_cols`, `about`, `quota_dialog`,
+`quota_row`, `cli`); it imports the library's modules at its crate root, so
+`crate::<module>` paths read the same in both. New logic that a non-terminal
+caller could use belongs in the library; anything that renders stays in the
+binary. Changing a `pub` item in the library is a change to the crate's public
+API, so it needs the same care as a CLI flag.
 
 The fastest way to check detection and aggregation against real processes is the
 non-interactive dump:

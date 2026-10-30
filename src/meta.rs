@@ -11,9 +11,11 @@
 use std::fs;
 use std::path::Path;
 
+use serde::Serialize;
+
 /// Subset of a firstmate `*.meta` record. Only the keys crew-watch needs are
 /// parsed; unknown keys are ignored.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct TaskRecord {
     pub task_id: String,
     /// Filename stem of the `state/<stem>.meta` record. firstmate names the
