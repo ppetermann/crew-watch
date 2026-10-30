@@ -579,7 +579,7 @@ mod tests {
         let row = once_agent_row(
             "blocked!!",
             "a-very-long-runtime",
-            "-",
+            "claude-opus-5-5-with-a-very-long-suffix",
             1,
             0,
             0.0,

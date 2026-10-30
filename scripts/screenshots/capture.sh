@@ -22,6 +22,8 @@ if [ -z "$bin" ]; then
   (cd "$repo" && cargo build --release)
   bin=$repo/target/release/crew-watch
 fi
+# Fail now, not after the ~3-minute scene, on a bad CREW_WATCH_BIN.
+[ -f "$bin" ] && [ -x "$bin" ] || { echo "capture.sh: $bin is not an executable file" >&2; exit 1; }
 # Absolute, since scene.sh runs it from other directories.
 bin=$(cd "$(dirname "$bin")" && pwd -P)/$(basename "$bin")
 mkdir -p "$out"

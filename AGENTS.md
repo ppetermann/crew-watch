@@ -43,8 +43,11 @@ The fleet-wide flow: branch → local ladder → DRAFT PR → ready-flip → one
 review round → merge. Drafts run no CI.
 
 - **Local ladder = the authoritative commands above**, in order: fmt --check, clippy
-  -D warnings, test. Green locally means green in CI (same commands; see
-  `.github/workflows/ci.yml`, Linux `check` + `check-macos`).
+  -D warnings, test. The Linux `check` job in `.github/workflows/ci.yml` runs these
+  same commands; CI also cross-checks the darwin targets and runs clippy, test and a
+  smoke test on macOS (`check-macos`), which the local ladder never compiles. When a
+  change touches `src/macos/` or other cfg-gated code, also run
+  `rustup target add aarch64-apple-darwin && cargo check --target aarch64-apple-darwin`.
 - **PRs open as drafts, always** (`gh pr create --draft`); firstmate, not the worker,
   flips them ready on the PR's landing turn after rebasing onto main and re-running
   the ladder: `gh pr ready <n>` (undo: `gh pr ready <n> --undo`).
