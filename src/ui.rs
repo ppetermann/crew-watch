@@ -21,7 +21,7 @@ use crate::agent_cols::{
 use crate::app::{App, QuotaSelection};
 use crate::detect::{AgentKind, AGENT_KINDS};
 use crate::format_util::{format_age_compact, format_kib, format_uptime, make_bar};
-use crate::procfs::{CpuLine, Snapshot};
+use crate::procfs::{core_percents, CpuLine, Snapshot};
 use crate::quota::{has_usage_windows, ProviderQuota};
 use crate::quota_row::build_quota_rows;
 use crate::taskinfo::fit_task_line;
@@ -119,7 +119,7 @@ fn draw_top(f: &mut Frame, area: Rect, app: &App) {
         .title("System")
         .title_bottom(Line::from("crew-watch").right_aligned());
     let lines = match app.snapshot() {
-        Some(snap) => build_top_lines(snap, app.prev.as_ref(), area.width as usize),
+        Some(snap) => build_top_lines(snap, app.prev_snapshot(), area.width as usize),
         None => vec![Line::from("collecting /proc ...")],
     };
     let p = Paragraph::new(lines).block(block);
@@ -131,7 +131,7 @@ fn build_top_lines(curr: &Snapshot, prev: Option<&Snapshot>, width: usize) -> Ve
 
     // Per-core usage grid.
     let cores: Vec<&CpuLine> = curr.cpus.iter().filter(|c| !c.is_aggregate()).collect();
-    let pcts = core_pcts(curr, prev);
+    let pcts = core_percents(curr, prev);
     if !cores.is_empty() {
         let n = cores.len();
         let cols = cols_for_width(width);
@@ -211,34 +211,6 @@ fn build_top_lines(curr: &Snapshot, prev: Option<&Snapshot>, width: usize) -> Ve
 
 /// Per-core busy percentages (0..=100), matched core-by-core against the
 /// previous snapshot. Cores without a previous sample read 0%.
-fn core_pcts(curr: &Snapshot, prev: Option<&Snapshot>) -> Vec<f64> {
-    let cores: Vec<&CpuLine> = curr.cpus.iter().filter(|c| !c.is_aggregate()).collect();
-    let prev_map: std::collections::HashMap<&str, &CpuLine> = prev
-        .map(|p| {
-            p.cpus
-                .iter()
-                .filter(|c| !c.is_aggregate())
-                .map(|c| (c.name.as_str(), c))
-                .collect()
-        })
-        .unwrap_or_default();
-    cores
-        .iter()
-        .map(|c| {
-            let Some(p) = prev_map.get(c.name.as_str()) else {
-                return 0.0;
-            };
-            let total_d = c.total().saturating_sub(p.total());
-            if total_d == 0 {
-                return 0.0;
-            }
-            let idle_d = c.idle().saturating_sub(p.idle());
-            let busy_d = total_d.saturating_sub(idle_d);
-            (busy_d as f64 / total_d as f64) * 100.0
-        })
-        .collect()
-}
-
 fn format_cell(corenum: usize, pct: f64, bar_w: usize, cell_w: usize) -> String {
     let mut s = format!("{:>2} {:>3.0}% {}", corenum, pct, make_bar(pct, bar_w));
     if s.chars().count() < cell_w {
@@ -273,10 +245,10 @@ fn pct_color(pct: f64) -> Color {
 fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
     let block = Block::default().borders(Borders::ALL).title(format!(
         "Agents ({} sessions) [sorted by CPU% desc]",
-        app.sessions.len()
+        app.sessions().len()
     ));
 
-    if app.sessions.is_empty() {
+    if app.sessions().is_empty() {
         let p = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -320,7 +292,7 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
     ])
     .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let rows = app.sessions.iter().map(|s| {
+    let rows = app.sessions().iter().map(|s| {
         Row::new(vec![
             Cell::from(fit_state(s.activity, state_w)),
             Cell::from(s.kind.display.to_string()).style(Style::default().fg(kind_color(s.kind))),

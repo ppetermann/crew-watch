@@ -114,7 +114,7 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Unique temp dir under /tmp, mirroring the helpers in app.rs / titles.rs.
+    /// Unique temp dir under /tmp, mirroring the helpers in fleet.rs / titles.rs.
     fn tempfile_dir(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "crew-watch-cfg-test-{}-{}-{}",
