@@ -36,7 +36,7 @@ use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use crate::agent_cols::fit_elapsed;
+use crate::agent_cols::{fit_cpu, fit_elapsed, fit_mem, fit_pid};
 use crate::app::App;
 use crate::cli::Cli;
 use crate::quota::{spawn_poller, QuotaFetch};
@@ -248,13 +248,28 @@ fn resolve_fm_home(arg: Option<PathBuf>) -> PathBuf {
     PathBuf::from("agents/firstmate")
 }
 
-/// Fixed-width prefix of an agent row in `--once` output: every column before
-/// TASK plus the separating spaces.
-const ONCE_TASK_PREFIX_WIDTH: usize = 77;
-/// ELAPSED's column width in `--once` output: a surface-local width like the
-/// others in [`once_agent_header`], not the TUI's. Nine cells hold `999:59:59`
-/// and `41d16h`.
+/// Column widths of the agent table in `--once` output: surface-local widths,
+/// not the TUI's. Every value is fitted to its width (text truncated, numbers
+/// through the `agent_cols::fit_*` helpers), so no value can push TASK past
+/// [`ONCE_TASK_PREFIX_WIDTH`]. ELAPSED's nine cells hold `999:59:59` and
+/// `41d16h`; PID's seven hold Linux's largest `pid_max` (4194304).
+const ONCE_STATE_WIDTH: usize = 7;
+const ONCE_RUNTIME_WIDTH: usize = 10;
+const ONCE_MODEL_WIDTH: usize = 20;
+const ONCE_PID_WIDTH: usize = 7;
 const ONCE_ELAPSED_WIDTH: usize = 9;
+const ONCE_CPU_WIDTH: usize = 7;
+const ONCE_MEM_WIDTH: usize = 9;
+/// Fixed-width prefix of an agent row in `--once` output: every column before
+/// TASK plus the separating spaces (one between columns, two before TASK).
+const ONCE_TASK_PREFIX_WIDTH: usize = ONCE_STATE_WIDTH
+    + ONCE_RUNTIME_WIDTH
+    + ONCE_MODEL_WIDTH
+    + ONCE_PID_WIDTH
+    + ONCE_ELAPSED_WIDTH
+    + ONCE_CPU_WIDTH
+    + ONCE_MEM_WIDTH
+    + 8;
 
 /// Header line of the agent table in `--once` output. Column *alignment*
 /// mirrors the TUI table (src/ui.rs): numeric columns — PID, ELAPSED, CPU%,
@@ -265,7 +280,7 @@ const ONCE_ELAPSED_WIDTH: usize = 9;
 /// display width (see [`crate::activity::Activity::once_label`]).
 fn once_agent_header() -> String {
     format!(
-        "{:<7} {:<10} {:<20} {:>7} {:>elapsed$} {:>7} {:>9}  TASK",
+        "{:<state$} {:<runtime$} {:<model$} {:>pid$} {:>elapsed$} {:>cpu$} {:>mem$}  TASK",
         "STATE",
         "RUNTIME",
         "MODEL",
@@ -273,7 +288,13 @@ fn once_agent_header() -> String {
         "ELAPSED",
         "CPU%",
         "MEM",
-        elapsed = ONCE_ELAPSED_WIDTH
+        state = ONCE_STATE_WIDTH,
+        runtime = ONCE_RUNTIME_WIDTH,
+        model = ONCE_MODEL_WIDTH,
+        pid = ONCE_PID_WIDTH,
+        elapsed = ONCE_ELAPSED_WIDTH,
+        cpu = ONCE_CPU_WIDTH,
+        mem = ONCE_MEM_WIDTH,
     )
 }
 
@@ -290,18 +311,23 @@ fn once_agent_row(
     rss_kib: u64,
     task: &str,
 ) -> String {
-    use crate::format_util::{format_kib, format_percent};
     format!(
-        "{:<7} {:<10} {:<20.20} {:>7} {:>elapsed$} {:>7} {:>9}  {}",
+        "{:<state$.state$} {:<runtime$.runtime$} {:<model$.model$} {:>pid$} {:>elapsed$} {:>cpu$} {:>mem$}  {}",
         state,
         kind,
         model,
-        pid,
+        fit_pid(pid, ONCE_PID_WIDTH),
         fit_elapsed(elapsed_secs, ONCE_ELAPSED_WIDTH),
-        format_percent(cpu_percent),
-        format_kib(rss_kib),
+        fit_cpu(cpu_percent, ONCE_CPU_WIDTH),
+        fit_mem(rss_kib, ONCE_MEM_WIDTH),
         task,
-        elapsed = ONCE_ELAPSED_WIDTH
+        state = ONCE_STATE_WIDTH,
+        runtime = ONCE_RUNTIME_WIDTH,
+        model = ONCE_MODEL_WIDTH,
+        pid = ONCE_PID_WIDTH,
+        elapsed = ONCE_ELAPSED_WIDTH,
+        cpu = ONCE_CPU_WIDTH,
+        mem = ONCE_MEM_WIDTH,
     )
 }
 
@@ -530,6 +556,37 @@ mod tests {
         // column catches an over-wide ELAPSED that a prefix match would miss.
         let row = once_agent_row("busy", "claude", "-", 1, u64::MAX, 0.0, 0, "task");
         assert_eq!(row.find("task"), Some(ONCE_TASK_PREFIX_WIDTH));
+    }
+
+    #[test]
+    fn once_columns_never_push_task_past_the_fixed_prefix() {
+        // 100+ busy cores (5-digit CPU%), 1 PiB+ RSS and the widest pid each
+        // overflow their column unfitted; fitted, TASK keeps its start column.
+        for (pid, cpu, rss) in [
+            (1, 12_345.6, 0),
+            (1, f64::from(u32::MAX), 0),
+            (1, 0.0, u64::MAX),
+            (i32::MAX, 0.0, 0),
+            (i32::MAX, 99_999.9, u64::MAX),
+        ] {
+            let row = once_agent_row("busy", "claude", "-", pid, 0, cpu, rss, "task");
+            assert_eq!(row.find("task"), Some(ONCE_TASK_PREFIX_WIDTH), "{row}");
+        }
+        // A 5-digit CPU% drops its decimal and keeps all magnitude digits.
+        let row = once_agent_row("busy", "claude", "-", 1, 0, 12_345.6, 0, "task");
+        assert!(row.contains(" 12346% "), "{row}");
+        // Text columns truncate too, so an over-long label cannot shift TASK.
+        let row = once_agent_row(
+            "blocked!!",
+            "a-very-long-runtime",
+            "claude-opus-5-5-with-a-very-long-suffix",
+            1,
+            0,
+            0.0,
+            0,
+            "task",
+        );
+        assert_eq!(row.find("task"), Some(ONCE_TASK_PREFIX_WIDTH), "{row}");
     }
 
     #[test]
