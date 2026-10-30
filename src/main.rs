@@ -559,7 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn once_numeric_columns_never_push_task_past_the_fixed_prefix() {
+    fn once_columns_never_push_task_past_the_fixed_prefix() {
         // 100+ busy cores (5-digit CPU%), 1 PiB+ RSS and the widest pid each
         // overflow their column unfitted; fitted, TASK keeps its start column.
         for (pid, cpu, rss) in [

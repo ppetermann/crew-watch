@@ -111,5 +111,6 @@ access for the web fonts. The steps, each in its own file under
    `google-chrome --headless=new --force-device-scale-factor=2
    --window-size=<w>,<h> --screenshot=<out>.png <page>.html`.
 
-The system meters show the capturing host's own CPU, memory and uptime: the
-PID namespace hides processes, not `/proc/stat` or `/proc/meminfo`.
+The system panel (CPU and memory meters, task count, load average, uptime)
+shows the capturing host: the PID namespace hides other processes from the
+agent table, not the host-wide counters under `/proc`.

@@ -94,7 +94,10 @@ capture() { # session file pattern
   return 1
 }
 
-tmux new-session -d -s tui -x 150 -y 24 "$bin --fm-home $fm"
+# Shell-quoted, since tmux and once.sh hand these paths to a shell.
+qbin=$(printf %q "$bin")
+qfm=$(printf %q "$fm")
+tmux new-session -d -s tui -x 150 -y 24 "$qbin --fm-home $qfm"
 # The quota row arrives from a background poll; wait for it plus one more
 # tick so CPU% is measured over a full interval.
 capture tui "$work/tui.ansi" 'zai'
@@ -103,11 +106,11 @@ tmux capture-pane -e -p -t tui >"$work/tui.ansi"
 
 cat >"$work/once.sh" <<EOF
 printf '\$ crew-watch --once\n'
-$bin --once --fm-home $fm
+$qbin --once --fm-home $qfm
 printf '\$ '
 exec sleep 600
 EOF
-tmux new-session -d -s once -x 150 -y 16 "sh $work/once.sh"
+tmux new-session -d -s once -x 150 -y 16 "sh $(printf %q "$work/once.sh")"
 capture once "$work/once.ansi" 'quota zai'
 sleep 1
 tmux capture-pane -e -p -t once >"$work/once.ansi"

@@ -6,14 +6,15 @@ crew-watch detects it through the interpreter fallback (argv[1]'s basename).
 The load it shows comes from the environment, not argv, so no extra positional
 argument reads as a prompt:
 
-  STANDIN_CPU  target CPU% of one core (0-100), spun in 100 ms duty cycles
+  STANDIN_CPU  target CPU% of one core (clamped to 0-100), spun in 100 ms
+               duty cycles
   STANDIN_MEM  MiB of resident memory to allocate and touch
 """
 
 import os
 import time
 
-cpu = float(os.environ.get("STANDIN_CPU", "0")) / 100.0
+cpu = min(max(float(os.environ.get("STANDIN_CPU", "0")) / 100.0, 0.0), 1.0)
 mem = int(os.environ.get("STANDIN_MEM", "0"))
 
 # Non-zero fill so every page is actually resident.
