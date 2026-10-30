@@ -5,20 +5,25 @@
 # Needs bwrap, tmux, git, python3 and google-chrome (headless; it fetches the
 # JetBrains Mono and Noto Color Emoji web fonts, so it needs network access).
 #
-# Env: CREW_WATCH_BIN (default target/release/crew-watch, built if missing),
+# Env: CREW_WATCH_BIN (an explicit binary, used as-is; unset, the script runs
+#      `cargo build --release` first, a no-op when up to date, and uses
+#      target/release/crew-watch, so a capture never shows a stale build),
 #      OUT_DIR (default docs/img), STAGGER (seconds between launch waves).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd -P)
 repo=$(cd "$here/../.." && pwd -P)
-bin=${CREW_WATCH_BIN:-$repo/target/release/crew-watch}
+bin=${CREW_WATCH_BIN:-}
 out=${OUT_DIR:-$repo/docs/img}
 work=$(mktemp -d "${TMPDIR:-/tmp}/crew-watch-shots.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-if [ ! -x "$bin" ]; then
+if [ -z "$bin" ]; then
   (cd "$repo" && cargo build --release)
+  bin=$repo/target/release/crew-watch
 fi
+# Absolute, since scene.sh runs it from other directories.
+bin=$(cd "$(dirname "$bin")" && pwd -P)/$(basename "$bin")
 mkdir -p "$out"
 
 # A private PID namespace: crew-watch sees only the stand-ins, never a real

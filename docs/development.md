@@ -91,6 +91,8 @@ three things:
 scripts/screenshots/capture.sh   # ~3 minutes; OUT_DIR=<dir> to write elsewhere
 ```
 
+It runs `cargo build --release` first, so the images always show the code as
+it stands (set `CREW_WATCH_BIN=<path>` to capture a specific binary instead).
 It needs `bwrap`, `tmux`, `git`, `python3` and `google-chrome`, plus network
 access for the web fonts. The steps, each in its own file under
 `scripts/screenshots/`:
