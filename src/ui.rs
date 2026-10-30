@@ -209,8 +209,6 @@ fn build_top_lines(curr: &Snapshot, prev: Option<&Snapshot>, width: usize) -> Ve
     lines
 }
 
-/// Per-core busy percentages (0..=100), matched core-by-core against the
-/// previous snapshot. Cores without a previous sample read 0%.
 fn format_cell(corenum: usize, pct: f64, bar_w: usize, cell_w: usize) -> String {
     let mut s = format!("{:>2} {:>3.0}% {}", corenum, pct, make_bar(pct, bar_w));
     if s.chars().count() < cell_w {

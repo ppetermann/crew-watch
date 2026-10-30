@@ -22,8 +22,10 @@ the format check and the lint are hard gates, so run them before pushing.
 
 ## Library and binary
 
-One crate, two targets. `src/lib.rs` is the `crew_watch` library: every module
-that does not draw, with `src/fleet.rs` (`Sampler`) as its entry point. The
+One crate, two targets. `src/lib.rs` is the `crew_watch` library: the data layer
+plus the small text-fitting helpers its modules own (STATE glyphs, bars,
+task-line fitting) and the config file, with `src/fleet.rs` (`Sampler`) as its
+entry point; widgets, layout and terminal I/O stay in the binary. The
 `crew-watch` binary (`src/main.rs`) requires the default `tui` feature and owns
 the terminal modules (`app`, `ui`, `agent_cols`, `about`, `quota_dialog`,
 `quota_row`, `cli`); it imports the library's modules at its crate root, so

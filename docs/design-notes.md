@@ -39,9 +39,9 @@ I/O is a single `/proc` pass plus a handful of small best-effort file reads.
 
 Every module in the table is part of the `crew_watch` library except the
 terminal ones — `quota_row`, `quota_dialog`, `about`, `agent_cols`, `app` and
-`ui` — which live in the binary behind the default `tui` feature. The split is the same line as pure-versus-rendering: the library
-answers "what is running and what is it doing", the binary decides how that
-looks in a terminal.
+`ui` — which live in the binary behind the default `tui` feature. The library answers "what is running and what is it doing" and
+keeps the small text-fitting helpers its modules own (STATE glyphs, bars,
+task-line fitting); widgets, layout and terminal I/O are the binary's.
 
 Several of these modules carry a header comment stating a contract that is easy
 to break from the outside; `src/agent_cols.rs` and `src/quota_row.rs` in

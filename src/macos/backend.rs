@@ -13,7 +13,7 @@
 //!   (free + inactive/purgeable).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
 use sysinfo::{ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System, UpdateKind};
@@ -29,9 +29,12 @@ struct Backend {
     last: Instant,
 }
 
-/// Collect one system snapshot via sysinfo. Only ever runs on the tick
-/// thread (the quota poller runs off-path by contract), so the backend state
-/// is a plain mutex and a poisoned lock cannot occur in practice.
+/// Collect one system snapshot via sysinfo. The backend state is
+/// process-global, shared by every caller (each `fleet::Sampler`, on whatever
+/// thread it runs) and serialized by this mutex. Every collect refreshes
+/// from sysinfo again, so a panic mid-collect costs at most one skewed CPU
+/// delta; a poisoned lock is therefore recovered rather than turned into a
+/// panic on every later call.
 pub fn collect() -> Snapshot {
     let state = STATE.get_or_init(|| {
         Mutex::new(Backend {
@@ -40,7 +43,7 @@ pub fn collect() -> Snapshot {
             last: Instant::now(),
         })
     });
-    let mut backend = state.lock().unwrap();
+    let mut backend = state.lock().unwrap_or_else(PoisonError::into_inner);
     let elapsed = backend.last.elapsed().as_secs_f64();
     backend.last = Instant::now();
 

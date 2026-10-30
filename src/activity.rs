@@ -133,81 +133,111 @@ pub fn parse_status_verb(content: &str) -> Option<String> {
     parse_status_line(content).map(|(verb, _)| verb)
 }
 
-/// Last status verb of a `.status` log plus the line's `[at=<epoch>]` stamp,
-/// when the head (the text before the first `:`) carries one
-/// (`paused [at=1793381955]: ...` → `("paused", Some(1793381955))`). A stamp
-/// that is not plain digits records no time, so it is `None`.
+/// Last status verb of a `.status` log plus the line's `[at=<epoch>]` stamp
+/// (`paused [at=1793381955]: ...` → `("paused", Some(1793381955))`). The
+/// verb is read as [`parse_status_verb`] reads it; the stamp as
+/// [`parse_status_at`] does.
 pub fn parse_status_line(content: &str) -> Option<(String, Option<u64>)> {
     let line = content.lines().rev().find(|l| !l.trim().is_empty())?;
     let head = line.split(':').next()?;
-    let mut tokens = head.split_whitespace();
-    let verb = tokens.next()?.to_string();
-    let at = tokens.find_map(|t| {
-        let digits = t.strip_prefix("[at=")?.strip_suffix(']')?;
-        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        digits.parse().ok()
-    });
-    Some((verb, at))
+    let verb = head.split_whitespace().next()?.to_string();
+    Some((verb, parse_status_at(line)))
 }
 
-/// A gen-valid firstmate busy-state record: the turn state (`None` for the
-/// contract's `unknown` or an unrecognised token) and its `ts=` stamp.
+/// The `[at=<epoch>]` emission stamp of one status line, ported from the
+/// grammar's owner, firstmate's `_fm_status_at_epoch` in
+/// `bin/fm-classify-lib.sh`: the stamp sits in the head before the line's
+/// first `:` (a line without one has none), runs from the first `[at=` to the
+/// next `]`, and is canonical unsigned decimal of at most 12 digits (no
+/// leading zero). A malformed or duplicated stamp means unknown time: `None`.
+pub fn parse_status_at(line: &str) -> Option<u64> {
+    let (head, _) = line.split_once(':')?;
+    let rest = &head[head.find("[at=")? + "[at=".len()..];
+    let (value, after) = rest.split_once(']')?;
+    if after.contains("[at=")
+        || value.is_empty()
+        || value.len() > 12
+        || !value.bytes().all(|b| b.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return None;
+    }
+    value.parse().ok()
+}
+
+/// A well-formed, gen-valid firstmate busy-state record: the turn state
+/// (`None` for the contract's `unknown`) and its `ts=` stamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BusyRecord {
     pub busy: Option<bool>,
-    pub ts: Option<u64>,
+    pub ts: u64,
 }
 
 /// Parse a firstmate busy-state record against its armed gen. Returns the
 /// turn state only for a well-formed `v1` record whose gen matches;
-/// everything else — missing gen, version drift, stale gen, unknown state
-/// token, extra lines — is `None` (unknown), mirroring fm-busy-lib.sh's
-/// "never idle on bad data" rule.
+/// everything else — missing gen, version drift, stale gen, malformed
+/// record — is `None` (unknown), mirroring fm-busy-lib.sh's "never idle on
+/// bad data" rule.
 pub fn parse_busy_state(record: &str, armed_gen: Option<&str>) -> Option<bool> {
     parse_busy_record(record, armed_gen)?.busy
 }
 
 /// Parse a firstmate busy-state record against its armed gen, keeping its
-/// `ts=` stamp. `None` for everything [`parse_busy_state`] rejects as bad
-/// data (missing or stale gen, version drift, extra lines, no `state=`); a
-/// gen-valid record with an unrecognised state is `Some` with `busy: None`.
+/// `ts=` stamp. Ported from the grammar's owner, `fm_busy_record_read` in
+/// firstmate's `bin/fm-busy-lib.sh`: exactly one newline-terminated line of
+/// space-separated `v1` then only the `gen=`, `seq=`, `state=`, `source=`,
+/// `event=` and `ts=` fields; `gen`, `source` and `event` are
+/// `[A-Za-z0-9._-]+` tokens, `seq` and `ts` are digits, `state` is `busy`,
+/// `idle` or `unknown`. A record that breaks any rule, or whose gen is not the
+/// armed one, is `None`.
 pub fn parse_busy_record(record: &str, armed_gen: Option<&str>) -> Option<BusyRecord> {
     let armed = armed_gen?.trim();
     if armed.is_empty() {
         return None;
     }
-    let mut lines = record.lines().filter(|l| !l.trim().is_empty());
-    let line = lines.next()?;
-    if lines.next().is_some() {
+    let line = record.strip_suffix('\n')?;
+    if line.contains('\n') {
         return None; // the contract is exactly one line
     }
-    let mut fields = line.split_whitespace();
+    let mut fields = line.split(' ').filter(|f| !f.is_empty());
     if fields.next() != Some("v1") {
         return None;
     }
-    let mut gen = None;
-    let mut state = None;
-    let mut ts = None;
+    let (mut gen, mut seq, mut state, mut source, mut event, mut ts) = ("", "", "", "", "", "");
     for f in fields {
-        if let Some(v) = f.strip_prefix("gen=") {
-            gen = Some(v);
-        } else if let Some(v) = f.strip_prefix("state=") {
-            state = Some(v);
-        } else if let Some(v) = f.strip_prefix("ts=") {
-            ts = v.parse().ok();
+        let (key, value) = f.split_once('=')?;
+        match key {
+            "gen" => gen = value,
+            "seq" => seq = value,
+            "state" => state = value,
+            "source" => source = value,
+            "event" => event = value,
+            "ts" => ts = value,
+            _ => return None,
         }
     }
-    if gen? != armed {
+    let token = |v: &str| {
+        !v.is_empty()
+            && v.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    let digits = |v: &str| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit());
+    if !token(gen) || !token(source) || !token(event) || !digits(seq) || !digits(ts) {
         return None;
     }
-    let busy = match state? {
+    let busy = match state {
         "busy" => Some(true),
         "idle" => Some(false),
-        _ => None,
+        "unknown" => None,
+        _ => return None,
     };
-    Some(BusyRecord { busy, ts })
+    if gen != armed {
+        return None;
+    }
+    Some(BusyRecord {
+        busy,
+        ts: ts.parse().ok()?,
+    })
 }
 
 /// Combine lifecycle verb and turn state into an [`Activity`] for a
@@ -266,7 +296,7 @@ pub fn load_task_state(fm_home: &Path, stem: &str) -> TaskState {
         activity: classify(status_verb.as_deref(), busy.and_then(|b| b.busy)),
         status_verb,
         status_at,
-        busy_ts: busy.and_then(|b| b.ts),
+        busy_ts: busy.map(|b| b.ts),
     }
 }
 
@@ -353,6 +383,17 @@ mod tests {
             parse_status_line(resolved),
             Some(("resolved".to_string(), Some(1_793_382_000)))
         );
+        // firstmate matches the stamp as a substring, not a whole token.
+        assert_eq!(
+            parse_status_at("working [at=1793381955][key=x]: glued"),
+            Some(1_793_381_955)
+        );
+        // A lone zero is canonical decimal; twelve digits is the ceiling.
+        assert_eq!(parse_status_at("working [at=0]: zero"), Some(0));
+        assert_eq!(
+            parse_status_at("working [at=999999999999]: max"),
+            Some(999_999_999_999)
+        );
     }
 
     #[test]
@@ -362,6 +403,16 @@ mod tests {
             "working [at=<epoch>]: unsubstituted\n",
             "working [at=]: empty\n",
             "working [at=-5]: signed\n",
+            "working [at=+5]: plus\n",
+            // Duplicate stamps mean unknown time, even when they agree.
+            "working [at=1] [at=2]: dup\n",
+            "working [at=7] [at=7]: same\n",
+            "working [at=0123]: leading zero\n",
+            "working [at=1234567890123]: thirteen digits\n",
+            "working [at=17933 81955]: space\n",
+            "working [at=1793381955: unclosed\n",
+            // No colon: firstmate reads no stamp from such a line.
+            "working [at=1793381955]\n",
         ] {
             assert_eq!(
                 parse_status_line(log),
@@ -410,14 +461,14 @@ mod tests {
             parse_busy_record(&record("busy"), Some(GEN)),
             Some(BusyRecord {
                 busy: Some(true),
-                ts: Some(1_786_790_704)
+                ts: 1_786_790_704
             })
         );
         assert_eq!(
             parse_busy_record(&record("unknown"), Some(GEN)),
             Some(BusyRecord {
                 busy: None,
-                ts: Some(1_786_790_704)
+                ts: 1_786_790_704
             })
         );
         // A stale incarnation's stamp is not this task's.
@@ -469,6 +520,27 @@ mod tests {
             serde_json::to_string(&Activity::Unknown).unwrap(),
             "\"unknown\""
         );
+    }
+
+    #[test]
+    fn busy_record_rejects_what_firstmate_calls_malformed() {
+        let ok = record("busy");
+        for bad in [
+            ok.replace("ts=1786790704", "ts=+5"),
+            ok.replace("ts=1786790704", "ts=abc"),
+            ok.replace("ts=1786790704", "ts="),
+            ok.replace(" ts=1786790704", ""),
+            ok.replace("state=busy", "state=garbage"),
+            ok.replace("seq=2", "seq=x"),
+            ok.replace("source=claude-hook", "source=claude/hook"),
+            ok.replace("event=stop", "event="),
+            ok.replace(" event=stop", " event=stop extra=1"),
+            ok.replace(" event=stop", " event=stop bare"),
+            ok.trim_end().to_string(), // no terminating newline
+            format!("{ok}\n"),         // a second, empty line
+        ] {
+            assert_eq!(parse_busy_record(&bad, Some(GEN)), None, "{bad:?}");
+        }
     }
 
     #[test]

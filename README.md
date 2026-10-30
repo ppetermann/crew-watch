@@ -314,23 +314,15 @@ so the terminal UI and its dependencies are not compiled:
 crew-watch = { version = "0.4", default-features = false }
 ```
 
-```rust
-use crew_watch::fleet::Sampler;
+Point a `crew_watch::fleet::Sampler` at a firstmate home (any home: the library
+has no default path) and call `sample()` on an interval for a serializable
+snapshot of the system and every agent session. The
+[crate documentation](https://docs.rs/crew-watch/latest/crew_watch/) has a
+runnable example.
 
-// Any firstmate home: the library has no default path.
-let mut sampler = Sampler::new("/home/me/agents/firstmate".into());
-loop {
-    let sample = sampler.sample(); // serde-serializable FleetSample
-    for agent in &sample.agents {
-        println!("{} {:?} {:.1}% {}", agent.pid, agent.activity, agent.cpu_percent, agent.title);
-    }
-    std::thread::sleep(std::time::Duration::from_secs(2));
-}
-```
-
-Each `sample()` reads the system once. CPU figures are measured between two
-samples, so the first one reads 0%; call it on a steady interval as the TUI
-does. Every row carries the raw stamps behind its `STATE` (the last status
+Each `sample()` reads the system once, with blocking filesystem I/O, so run it
+off an async runtime's worker threads. CPU figures are measured between two
+samples, so the first one reads 0%. Every row carries the raw stamps behind its `STATE` (the last status
 line's verb and `[at=]` time, the turn record's `ts=`) so a caller can judge
 staleness itself, plus the pull request firstmate's merge poll is armed for.
 

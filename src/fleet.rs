@@ -13,6 +13,11 @@
 //!
 //! CPU figures are deltas between consecutive samples, so a sampler's first
 //! sample reads 0% everywhere; sample on a steady cadence (the TUI uses 2s).
+//!
+//! Sampling blocks: each refresh walks the whole process table and reads a
+//! few small files per fleet row with synchronous filesystem I/O. From async
+//! code, run it on a blocking thread (e.g. `tokio::task::spawn_blocking`) or a
+//! dedicated sampler thread.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -60,7 +65,9 @@ pub struct SystemStats {
     pub swap_total_kib: u64,
     pub swap_used_kib: u64,
     /// 1-, 5- and 15-minute load averages.
-    pub load: (f64, f64, f64),
+    pub load_1m: f64,
+    pub load_5m: f64,
+    pub load_15m: f64,
     /// Total and currently running tasks (threads), as `/proc/loadavg`
     /// reports them.
     pub tasks: u64,
@@ -145,6 +152,7 @@ impl Sampler {
     }
 
     /// [`Sampler::refresh`], then the result as one serializable sample.
+    /// Blocking; see the module header.
     pub fn sample(&mut self) -> FleetSample {
         self.refresh();
         FleetSample {
@@ -216,7 +224,9 @@ impl SystemStats {
             mem_used_kib: mem.mem_total_kib.saturating_sub(mem.mem_avail_kib),
             swap_total_kib: mem.swap_total_kib,
             swap_used_kib: mem.swap_total_kib.saturating_sub(mem.swap_free_kib),
-            load: (curr.load.one, curr.load.five, curr.load.fifteen),
+            load_1m: curr.load.one,
+            load_5m: curr.load.five,
+            load_15m: curr.load.fifteen,
             tasks: curr.load.total,
             tasks_running: curr.load.running,
             uptime_secs: curr.uptime.secs.max(0.0) as u64,
@@ -324,15 +334,20 @@ mod tests {
         dir
     }
 
-    /// Write a `state/<task-id>.meta` record.
-    fn write_meta(home: &Path, task_id: &str, worktree: &str) {
+    /// Write a `state/<task-id>.meta` record, with a `project=` line when
+    /// `project` is given (which drops the `[task-id]` suffix from a titled
+    /// task line).
+    fn write_meta(home: &Path, task_id: &str, worktree: &str, project: Option<&str>) {
         let state = home.join("state");
         fs::create_dir_all(&state).unwrap();
+        let project = project
+            .map(|p| format!("project={p}\n"))
+            .unwrap_or_default();
         fs::write(
             state.join(format!("{}.meta", task_id)),
             format!(
-                "endpoint_task_id={}\nworktree={}\nproject=/home/crew/projects/firstmate\nharness=opencode\n",
-                task_id, worktree
+                "endpoint_task_id={}\nworktree={}\n{}harness=opencode\n",
+                task_id, worktree, project
             ),
         )
         .unwrap();
@@ -360,9 +375,26 @@ mod tests {
                     ppid: 1,
                     comm: cmdline[0].to_string(),
                     rss_pages: 256,
+                    // Started 100s after boot: 9900s before the 10000s uptime.
+                    starttime: 100 * CLK_TZ,
                     ..ProcStat::default()
                 },
                 cmdline: cmdline.iter().map(|s| s.to_string()).collect(),
+                cwd: Some(PathBuf::from(cwd)),
+            },
+        );
+        // One tool process in the agent's subtree.
+        snap.procs.insert(
+            43,
+            ProcEntry {
+                stat: ProcStat {
+                    pid: 43,
+                    ppid: 42,
+                    comm: "cargo".to_string(),
+                    rss_pages: 128,
+                    ..ProcStat::default()
+                },
+                cmdline: vec!["cargo".to_string()],
                 cwd: Some(PathBuf::from(cwd)),
             },
         );
@@ -382,7 +414,12 @@ mod tests {
     #[test]
     fn fleet_row_carries_task_state_stamps_and_pr() {
         let home = tempfile_dir("fleet-row");
-        write_meta(&home, "cw-lib", WORKTREE);
+        write_meta(
+            &home,
+            "cw-lib",
+            WORKTREE,
+            Some("/home/crew/projects/firstmate"),
+        );
         write_backlog(
             &home,
             "- [ ] cw-lib - split crew-watch into a library (repo: x)\n",
@@ -415,11 +452,20 @@ mod tests {
         assert_eq!(row.status_verb.as_deref(), Some("paused"));
         assert_eq!(row.status_at, Some(1_793_381_955));
         assert_eq!(row.busy_ts, None);
-        assert_eq!(row.rss_kib, 1024);
+        // The subtree: the agent and its one child, 256 + 128 pages of 4 KiB.
+        assert_eq!(row.rss_kib, 1536);
+        assert_eq!(row.children, 1);
+        assert_eq!(row.elapsed_secs, 9900);
         assert_eq!(row.pr.as_ref().map(|p| p.number), Some(7));
-        // The TUI's session is filled from the same resolution.
-        assert_eq!(sessions[0].task, row.title);
-        assert_eq!(sessions[0].activity, Activity::Paused);
+        // The TUI's session is filled from the same resolution, and the
+        // row's process figures are the session's.
+        let s = &sessions[0];
+        assert_eq!(s.task, row.title);
+        assert_eq!(s.activity, Activity::Paused);
+        assert_eq!(
+            (row.cpu_percent, row.rss_kib, row.elapsed_secs, row.children),
+            (s.cpu_percent, s.rss_kib, s.elapsed_secs, s.children)
+        );
 
         let json = serde_json::to_value(row).unwrap();
         assert_eq!(json["activity"], "paused");
@@ -491,7 +537,9 @@ mod tests {
                 mem_used_kib: 600,
                 swap_total_kib: 200,
                 swap_used_kib: 50,
-                load: (1.5, 1.0, 0.5),
+                load_1m: 1.5,
+                load_5m: 1.0,
+                load_15m: 0.5,
                 tasks: 900,
                 tasks_running: 3,
                 uptime_secs: 3600,
@@ -524,7 +572,7 @@ mod tests {
         // swapped to task-B at the identical worktree, and reload_fleet must
         // make resolution converge on task-B's title.
         let home = tempfile_dir("recycled");
-        write_meta(&home, "finished-task", WORKTREE);
+        write_meta(&home, "finished-task", WORKTREE, None);
         write_backlog(
             &home,
             "- [x] finished-task - give each worker its own browser session (repo: x) (done 2026-08-12)\n\
@@ -544,12 +592,15 @@ mod tests {
             &cmdline,
             kind("opencode"),
         );
-        assert_eq!(initial.line, "give each worker its own browser session");
+        assert_eq!(
+            initial.line,
+            "give each worker its own browser session [finished-task]"
+        );
 
         // Firstmate recycles the worktree: finished-task's meta is removed and
         // fresh-scout takes over the SAME path.
         fs::remove_file(home.join("state").join("finished-task.meta")).unwrap();
-        write_meta(&home, "fresh-scout", WORKTREE);
+        write_meta(&home, "fresh-scout", WORKTREE, None);
 
         // reload_fleet is exactly what refresh() calls before resolving.
         sampler.reload_fleet();
@@ -563,7 +614,7 @@ mod tests {
             kind("opencode"),
         );
         assert_eq!(
-            after.line, "scout the new fleet layout",
+            after.line, "scout the new fleet layout [fresh-scout]",
             "recycled worktree must show the new task, not the finished one"
         );
     }
@@ -575,7 +626,7 @@ mod tests {
         // keeping a ghost label. After reload the record is gone, so layer 1
         // no longer matches and resolution falls through.
         let home = tempfile_dir("vanished");
-        write_meta(&home, "doomed-task", WORKTREE);
+        write_meta(&home, "doomed-task", WORKTREE, None);
         write_backlog(
             &home,
             "- [ ] doomed-task - soon to be torn down (repo: x)\n",
@@ -609,6 +660,39 @@ mod tests {
         );
     }
 
+    // --- refresh(): the public path re-reads the fleet every time ---
+
+    #[test]
+    fn refresh_drops_a_record_removed_since_the_last_one() {
+        let home = tempfile_dir("refresh-records");
+        write_meta(&home, "torn-down", WORKTREE, None);
+        let mut sampler = Sampler::new(home.clone());
+        assert_eq!(sampler.records().len(), 1);
+
+        fs::remove_file(home.join("state").join("torn-down.meta")).unwrap();
+        sampler.refresh();
+        assert!(sampler.records().is_empty(), "refresh must re-read records");
+    }
+
+    #[test]
+    fn refresh_picks_up_a_retitled_task() {
+        let home = tempfile_dir("refresh-titles");
+        write_backlog(&home, "- [ ] retitled - the old title (repo: x)\n");
+        let mut sampler = Sampler::new(home.clone());
+        assert_eq!(
+            sampler.titles().title_for("retitled"),
+            Some("the old title")
+        );
+
+        write_backlog(&home, "- [ ] retitled - the new title (repo: x)\n");
+        let sample = sampler.sample();
+        assert_eq!(
+            sampler.titles().title_for("retitled"),
+            Some("the new title")
+        );
+        assert_eq!(sample.agents, sampler.rows());
+    }
+
     // --- non-fatal sources ---
 
     #[test]
@@ -624,7 +708,7 @@ mod tests {
         // A fleet home that vanishes mid-run must never crash the monitor.
         // reload_fleet re-reads best-effort and yields empty data.
         let home = tempfile_dir("vanish-midrun");
-        write_meta(&home, "some-task", WORKTREE);
+        write_meta(&home, "some-task", WORKTREE, None);
 
         let mut sampler = Sampler::new(home.clone());
         assert_eq!(sampler.records().len(), 1);
