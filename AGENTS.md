@@ -43,13 +43,14 @@ The fleet-wide flow: branch → local ladder → DRAFT PR → ready-flip → one
 review round → merge. Drafts run no CI.
 
 - **Local ladder = the authoritative commands above**, in order: fmt --check, clippy
-  -D warnings, test. Green locally means green in CI (same commands).
-- **PRs open as drafts, always** (`gh pr create --draft`); flip on this PR's landing
-  turn after rebasing onto main and re-running the ladder: `gh pr ready <n>`
-  (undo: `gh pr ready <n> --undo`).
-- **Review gate:** the `ocr-review` check + one approving review (branch protection:
-  `check`, `check-macos`, `ocr-review` required, stale reviews dismissed, last push
-  must be approved).
+  -D warnings, test. Green locally means green in CI (same commands; see
+  `.github/workflows/ci.yml`, Linux `check` + `check-macos`).
+- **PRs open as drafts, always** (`gh pr create --draft`); firstmate, not the worker,
+  flips them ready on the PR's landing turn after rebasing onto main and re-running
+  the ladder: `gh pr ready <n>` (undo: `gh pr ready <n> --undo`).
+- **Review gate:** the OCR review bot is the reviewer — the `ocr-review` check plus
+  its approving review (branch protection: `check`, `check-macos`, `ocr-review`
+  required, stale reviews dismissed, last push must be approved).
 - **Release tail (batched):** one release PR bumps `version` in Cargo.toml and updates
   README floors/notes (seed the notes with
   `git log v<prev>..HEAD --merges --format='- %s (%h)'`). After it merges:
@@ -81,7 +82,9 @@ is unnecessary; CI (ubuntu-latest) has gcc by default. See
 
 `docs/img/*.png` must never be captured against the real fleet: a synthetic
 scratch `--fm-home` plus stand-in processes only, inside a private PID
-namespace, on a dedicated `tmux -L <unique>` socket that is killed afterwards.
-Never drive the default tmux server for a capture. Procedure:
-`docs/development.md`.
+namespace, on a dedicated tmux socket that is killed afterwards. Never drive
+the default tmux server for a capture. `scripts/screenshots/capture.sh` does
+all of it end to end (scene → `tmux capture-pane -e` → HTML → headless Chrome
+PNG); regenerate both images with it whenever a change alters what the TUI or
+`--once` shows. Details: `docs/development.md`.
 

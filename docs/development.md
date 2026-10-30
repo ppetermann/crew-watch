@@ -82,7 +82,34 @@ three things:
   an equivalent), so `crew-watch` can only see the stand-in processes and no
   real command line reaches the image.
 - **A dedicated tmux socket.** Render on a socket created for the capture
-  (`tmux -L <something-unique>`) and kill only that server afterwards; never
-  drive a shared or default tmux server for a capture.
+  (`tmux -S <private path>` or `tmux -L <something-unique>`) and kill only that
+  server afterwards; never drive a shared or default tmux server for a capture.
 
-The panes used for the current images are 150x24 (TUI) and 150x16 (`--once`).
+`scripts/screenshots/capture.sh` does all of this and writes both PNGs:
+
+```sh
+scripts/screenshots/capture.sh   # ~3 minutes; OUT_DIR=<dir> to write elsewhere
+```
+
+It needs `bwrap`, `tmux`, `git`, `python3` and `google-chrome`, plus network
+access for the web fonts. The steps, each in its own file under
+`scripts/screenshots/`:
+
+1. **Scene** (`scene.sh`, run inside `bwrap --unshare-pid`): fills a scratch
+   firstmate home (`state/*.meta`, `.status`, `.busy-state`/`.busy-gen`,
+   `data/backlog.md`), puts a fake `quota-axi` on `PATH`, and starts stand-in
+   agents (`standin.py`, run through `python3` under each runtime's name, with
+   a set CPU load and resident size) in three waves a minute apart so ELAPSED
+   differs between rows. Edit the `scene` table there to change the rows.
+2. **Capture**: runs `crew-watch` (150x24) and `crew-watch --once` (150x16) in
+   a tmux server on a socket inside the scratch directory, waits until the
+   quota row has drawn, and saves each pane with `tmux capture-pane -e -p`
+   (text plus colour escapes).
+3. **Render**: `ansi2html.py` turns each capture into a fixed-grid HTML page
+   (JetBrains Mono, Noto Color Emoji for the STATE glyphs, a One Dark palette),
+   and headless Chrome screenshots it at 2x:
+   `google-chrome --headless=new --force-device-scale-factor=2
+   --window-size=<w>,<h> --screenshot=<out>.png <page>.html`.
+
+The system meters show the capturing host's own CPU, memory and uptime: the
+PID namespace hides processes, not `/proc/stat` or `/proc/meminfo`.

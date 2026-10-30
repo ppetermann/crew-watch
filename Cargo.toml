@@ -9,7 +9,7 @@ homepage = "https://github.com/ppetermann/crew-watch"
 readme = "README.md"
 keywords = ["firstmate", "tui", "monitoring", "htop", "agents"]
 categories = ["command-line-utilities", "os::linux-apis", "os::macos-apis"]
-exclude = ["/docs/img", "/.github"]
+exclude = ["/docs/img", "/.github", "/scripts"]
 
 [[bin]]
 name = "crew-watch"
