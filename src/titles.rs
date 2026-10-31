@@ -80,34 +80,130 @@ pub fn load_task_titles(home: &Path) -> TaskTitles {
 /// Parse `data/backlog.md` into `(task_id, title)` pairs. Lenient: any line
 /// that is not a `- [ ] <id> - ...` / `- [x] <id> - ...` checkbox is skipped.
 pub fn parse_backlog(content: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
+    content
+        .lines()
+        .filter_map(checkbox)
+        .map(|(id, title, _)| (id, title))
+        .collect()
+}
+
+/// One task of `data/backlog.md`: its checkbox line's id, title and
+/// `(name: value)` markers, and the indented note lines under it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct BacklogEntry {
+    pub id: String,
+    /// The title, as [`parse_backlog`] reads it.
+    pub title: String,
+    /// The checkbox is ticked (`- [x]`).
+    pub done: bool,
+    /// The `(kind: …)` marker: `ship`, `scout`, `captain`, ...
+    pub kind: Option<String>,
+    /// The `(repo: …)` marker.
+    pub repo: Option<String>,
+    /// The `(hold-kind: …)` marker of a held task (`captain`, ...).
+    pub hold_kind: Option<String>,
+    /// The checkbox line itself.
+    pub line: String,
+    /// The indented lines under the checkbox, up to the next checkbox,
+    /// heading or blank line, each trimmed, joined with newlines.
+    pub note: String,
+}
+
+impl BacklogEntry {
+    /// The planner's estimate in minutes: the first `estimate=<N>m` token in
+    /// the entry (checkbox line, then note), as firstmate's effort ledger
+    /// (`bin/fm-effort-ledger.sh`) reads it: the token starts the text or
+    /// follows a character that is not a letter, digit, `_` or `-`.
+    pub fn estimate_min(&self) -> Option<u64> {
+        [self.line.as_str(), self.note.as_str()]
+            .into_iter()
+            .find_map(first_estimate)
+    }
+}
+
+fn first_estimate(text: &str) -> Option<u64> {
+    const TOKEN: &str = "estimate=";
+    let mut from = 0;
+    while let Some(i) = text[from..].find(TOKEN).map(|i| i + from) {
+        from = i + TOKEN.len();
+        let starts_word = text[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+        let tail = &text[from..];
+        let n = tail.bytes().take_while(u8::is_ascii_digit).count();
+        if starts_word && n > 0 && tail[n..].starts_with('m') {
+            if let Ok(minutes) = tail[..n].parse() {
+                return Some(minutes);
+            }
+        }
+    }
+    None
+}
+
+/// Parse `data/backlog.md` into its entries, in file order. Lenient in the
+/// same way as [`parse_backlog`]: a line that is not a task checkbox is no
+/// entry (a heading or blank line ends the note of the one before it).
+pub fn parse_backlog_entries(content: &str) -> Vec<BacklogEntry> {
+    let mut out: Vec<BacklogEntry> = Vec::new();
+    let mut in_note = false;
     for line in content.lines() {
-        let trimmed = line.trim_start();
-        // Checkbox: "- [ ] " or "- [x] " (case-insensitive on the mark).
-        let after_box = trimmed
-            .strip_prefix("- [")
-            .and_then(|s| {
-                let m = s.chars().next()?;
-                if m == ' ' || m == 'x' || m == 'X' {
-                    Some(&s[1..])
-                } else {
-                    None
-                }
-            })
-            .and_then(|s| s.strip_prefix("] "));
-        let Some(rest) = after_box else {
+        if let Some((id, title, done)) = checkbox(line) {
+            out.push(BacklogEntry {
+                id,
+                title,
+                done,
+                kind: marker(line, "kind"),
+                repo: marker(line, "repo"),
+                hold_kind: marker(line, "hold-kind"),
+                line: line.trim().to_string(),
+                note: String::new(),
+            });
+            in_note = true;
             continue;
-        };
-        // task id is up to the first " - " separator.
-        let Some((id, title_part)) = rest.split_once(" - ") else {
+        }
+        let indented = line.starts_with(' ') || line.starts_with('\t');
+        if !in_note || !indented || line.trim().is_empty() {
+            in_note = false;
             continue;
-        };
-        let title = strip_trailing_markers(title_part.trim());
-        if !title.is_empty() {
-            out.push((id.trim().to_string(), title));
+        }
+        if let Some(entry) = out.last_mut() {
+            if !entry.note.is_empty() {
+                entry.note.push('\n');
+            }
+            entry.note.push_str(line.trim());
         }
     }
     out
+}
+
+/// Every backlog entry under a firstmate home; empty when the backlog is
+/// missing or unreadable.
+pub fn load_backlog_entries(home: &Path) -> Vec<BacklogEntry> {
+    fs::read_to_string(home.join("data").join("backlog.md"))
+        .map(|c| parse_backlog_entries(&c))
+        .unwrap_or_default()
+}
+
+/// A task checkbox line's id, title and tick, as [`parse_backlog`] reads it.
+fn checkbox(line: &str) -> Option<(String, String, bool)> {
+    let s = line.trim_start().strip_prefix("- [")?;
+    let mark = s.chars().next()?;
+    if !matches!(mark, ' ' | 'x' | 'X') {
+        return None;
+    }
+    let rest = s[1..].strip_prefix("] ")?;
+    let (id, title_part) = rest.split_once(" - ")?;
+    let title = strip_trailing_markers(title_part.trim());
+    (!title.is_empty()).then(|| (id.trim().to_string(), title, mark != ' '))
+}
+
+/// The value of a ` (name: value)` marker on a checkbox line.
+fn marker(line: &str, name: &str) -> Option<String> {
+    let open = format!(" ({name}: ");
+    let rest = &line[line.find(&open)? + open.len()..];
+    let value = rest[..rest.find(')')?].trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 /// Strip the trailing firstmate metadata markers from a backlog title:
@@ -184,6 +280,92 @@ fn first_sentence(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- backlog entries ---
+
+    const ENTRIES: &str = "\
+# Backlog
+
+## In flight
+- [ ] miles-timeline-build - Step timelines on the Miles board (repo: miles) (kind: ship) (since 2026-10-31)
+  Captain 2026-10-31: yes to all five. estimate=125m dispatch-facts at=2026-10-31T09:51:11+0000
+- [ ] rv-miles-badge - OCR review round miles#56 at 7e2f5ba (kind: scout) (since 2026-10-31)
+- [ ] held - a captain's call (repo: x) (kind: captain) (hold: fm-hold-v1:abc=) (hold-kind: captain)
+  Captain hold set: 2026-10-24T05:44:11Z
+
+  not a note: the blank line ended it
+## Done
+- [x] miles-images - Miles: pictures https://github.com/o/miles/pull/52 (repo: miles) (kind: ship) (merged 2026-10-31)
+";
+
+    #[test]
+    fn backlog_entries_carry_markers_and_notes() {
+        let entries = parse_backlog_entries(ENTRIES);
+        let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "miles-timeline-build",
+                "rv-miles-badge",
+                "held",
+                "miles-images"
+            ]
+        );
+        let build = &entries[0];
+        assert_eq!(build.title, "Step timelines on the Miles board");
+        assert!(!build.done);
+        assert_eq!(build.kind.as_deref(), Some("ship"));
+        assert_eq!(build.repo.as_deref(), Some("miles"));
+        assert_eq!(build.hold_kind, None);
+        assert!(build.note.starts_with("Captain 2026-10-31"));
+        assert_eq!(build.estimate_min(), Some(125));
+        assert_eq!(entries[1].kind.as_deref(), Some("scout"));
+        assert_eq!(entries[1].repo, None);
+        assert_eq!(entries[1].estimate_min(), None);
+        let held = &entries[2];
+        assert_eq!(held.hold_kind.as_deref(), Some("captain"));
+        assert_eq!(held.note, "Captain hold set: 2026-10-24T05:44:11Z");
+        assert!(entries[3].done);
+        // The titles agree with the pair reader's.
+        let pairs: Vec<(String, String)> = entries
+            .iter()
+            .map(|e| (e.id.clone(), e.title.clone()))
+            .collect();
+        assert_eq!(pairs, parse_backlog(ENTRIES));
+    }
+
+    #[test]
+    fn estimates_are_read_as_the_effort_ledger_reads_them() {
+        let est = |line: &str| {
+            BacklogEntry {
+                line: line.to_string(),
+                ..BacklogEntry::default()
+            }
+            .estimate_min()
+        };
+        assert_eq!(est("estimate=25m"), Some(25));
+        assert_eq!(est("(x) estimate=40m, later"), Some(40));
+        assert_eq!(est("estimate=5min"), Some(5)); // the token ends at the m
+        for none in [
+            "re-estimate=25m",
+            "my_estimate=25m",
+            "xestimate=25m",
+            "estimate=m",
+            "estimate=25",
+            "estimate= 25m",
+        ] {
+            assert_eq!(est(none), None, "{none:?}");
+        }
+        // A token that does not count does not hide a later one.
+        assert_eq!(est("re-estimate=9m then estimate=30m"), Some(30));
+        // The checkbox line's token comes before the note's.
+        let both = BacklogEntry {
+            line: "- [ ] a - t estimate=10m".to_string(),
+            note: "estimate=20m".to_string(),
+            ..BacklogEntry::default()
+        };
+        assert_eq!(both.estimate_min(), Some(10));
+    }
 
     // --- backlog parsing ---
 

@@ -24,20 +24,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::activity::{load_task_state, Activity, TaskState};
+use crate::activity::{load_task_state, Activity, StatusLine, TaskState};
 use crate::detect::{build_sessions, Session};
+use crate::gate::{load_gate_pass, GatePass};
 use crate::meta::{find_by_cwd, load_fm_home, TaskRecord};
 use crate::model::resolve_model;
 use crate::procfs::{collect, core_percents, Snapshot};
 use crate::prpoll::{load_pr_poll, PrPoll};
 use crate::taskinfo::TaskInfo;
-use crate::titles::{load_task_titles, TaskTitles};
+use crate::titles::{load_backlog_entries, load_task_titles, BacklogEntry, TaskTitles};
 
 /// Fleet sampler over one firstmate home. See the module header.
 pub struct Sampler {
     fm_home: PathBuf,
     records: Vec<TaskRecord>,
     titles: TaskTitles,
+    backlog: Vec<BacklogEntry>,
     curr: Option<Snapshot>,
     prev: Option<Snapshot>,
     sessions: Vec<Session>,
@@ -109,6 +111,22 @@ pub struct AgentRow {
     pub children: usize,
     /// The PR firstmate's merge poll is armed for.
     pub pr: Option<PrPoll>,
+    /// From a fleet-matched row's `.meta`: the task kind (`ship`, `scout`,
+    /// ...), its delivery mode and branch, the PR URL firstmate registered,
+    /// and when its current incarnation was launched (Unix seconds).
+    pub task_kind: Option<String>,
+    pub mode: Option<String>,
+    pub branch: Option<String>,
+    pub registered_pr: Option<String>,
+    pub spawned_at: Option<u64>,
+    /// The task's whole `.status` log, oldest first.
+    pub status_log: Vec<StatusLine>,
+    /// The task's last green local gate.
+    pub gate_pass: Option<GatePass>,
+    /// The planner's estimate from the task's backlog entry, in minutes.
+    pub estimate_min: Option<u64>,
+    /// Modification time of `data/<task-id>/report.md`, when it exists.
+    pub report_at: Option<u64>,
 }
 
 impl Sampler {
@@ -118,10 +136,12 @@ impl Sampler {
     pub fn new(fm_home: PathBuf) -> Self {
         let records = load_fm_home(&fm_home);
         let titles = load_task_titles(&fm_home);
+        let backlog = load_backlog_entries(&fm_home);
         Self {
             fm_home,
             records,
             titles,
+            backlog,
             curr: None,
             prev: None,
             sessions: Vec::new(),
@@ -143,6 +163,7 @@ impl Sampler {
             &self.fm_home,
             &self.records,
             &self.titles,
+            &self.backlog,
             &snap,
             &mut sessions,
         );
@@ -176,6 +197,7 @@ impl Sampler {
     fn reload_fleet(&mut self) {
         self.records = load_fm_home(&self.fm_home);
         self.titles = load_task_titles(&self.fm_home);
+        self.backlog = load_backlog_entries(&self.fm_home);
     }
 
     pub fn fm_home(&self) -> &Path {
@@ -189,6 +211,11 @@ impl Sampler {
 
     pub fn titles(&self) -> &TaskTitles {
         &self.titles
+    }
+
+    /// The backlog entries read by the last refresh.
+    pub fn backlog(&self) -> &[BacklogEntry] {
+        &self.backlog
     }
 
     /// The latest snapshot; `None` before the first refresh.
@@ -240,6 +267,7 @@ fn resolve_sessions(
     fm_home: &Path,
     records: &[TaskRecord],
     titles: &TaskTitles,
+    backlog: &[BacklogEntry],
     snap: &Snapshot,
     sessions: &mut [Session],
 ) -> Vec<AgentRow> {
@@ -249,6 +277,7 @@ fn resolve_sessions(
         let mut interactive = false;
         let mut state = TaskState::default();
         let mut pr = None;
+        let mut gate_pass = None;
         if let Some(entry) = snap.procs.get(&s.pid) {
             let resolved = TaskInfo::resolve(
                 records,
@@ -276,6 +305,7 @@ fn resolve_sessions(
                 Some(r) => {
                     state = load_task_state(fm_home, &r.stem);
                     pr = load_pr_poll(fm_home, &r.stem);
+                    gate_pass = load_gate_pass(fm_home, &r.stem);
                 }
                 None if interactive => state.activity = Activity::Interactive,
                 None => state.activity = Activity::Unknown,
@@ -301,9 +331,34 @@ fn resolve_sessions(
             elapsed_secs: s.elapsed_secs,
             children: s.children,
             pr,
+            task_kind: record.and_then(|r| r.kind.clone()),
+            mode: record.and_then(|r| r.mode.clone()),
+            branch: record.and_then(|r| r.branch.clone()),
+            registered_pr: record.and_then(|r| r.pr.clone()),
+            spawned_at: record.and_then(TaskRecord::spawned_at),
+            status_log: state.status_log,
+            gate_pass,
+            estimate_min: record
+                .and_then(|r| backlog.iter().find(|e| e.id == r.task_id)?.estimate_min()),
+            report_at: record.and_then(|r| report_mtime(fm_home, &r.task_id)),
         });
     }
     rows
+}
+
+/// Unix mtime of `data/<task-id>/report.md`, a scout's deliverable.
+fn report_mtime(fm_home: &Path, task_id: &str) -> Option<u64> {
+    if task_id.is_empty() || task_id.contains('/') || task_id.starts_with('.') {
+        return None;
+    }
+    let path = fm_home.join("data").join(task_id).join("report.md");
+    std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
 }
 
 #[cfg(test)]
@@ -405,7 +460,8 @@ mod tests {
         let records = load_fm_home(home);
         let titles = load_task_titles(home);
         let mut sessions = build_sessions(snap, None);
-        let rows = resolve_sessions(home, &records, &titles, snap, &mut sessions);
+        let backlog = load_backlog_entries(home);
+        let rows = resolve_sessions(home, &records, &titles, &backlog, snap, &mut sessions);
         (sessions, rows)
     }
 
@@ -470,6 +526,75 @@ mod tests {
         let json = serde_json::to_value(row).unwrap();
         assert_eq!(json["activity"], "paused");
         assert_eq!(json["pr"]["url"], "https://github.com/o/r/pull/7");
+        // A meta without the task-shape keys leaves them empty.
+        assert_eq!((row.task_kind.as_ref(), row.spawned_at), (None, None));
+        assert_eq!(row.status_log.len(), 2);
+        assert_eq!(row.status_log[1].text, "awaiting review");
+        assert_eq!(row.gate_pass, None);
+        assert_eq!(row.estimate_min, None);
+        assert_eq!(row.report_at, None);
+    }
+
+    #[test]
+    fn fleet_row_carries_the_tasks_shape_gate_estimate_and_report() {
+        let home = tempfile_dir("fleet-shape");
+        let state = home.join("state");
+        fs::create_dir_all(&state).unwrap();
+        fs::write(
+            state.join("tl.meta"),
+            format!(
+                "endpoint_task_id=tl\nworktree={WORKTREE}\nkind=ship\nmode=direct-PR\n\
+                 branch=fm/tl\npr=https://github.com/o/r/pull/8\nspawn_gen=s1793440277.26.77\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            state.join("tl.status"),
+            "working [at=1793440300]: setup\n\
+             paused [at=1793440900]: awaiting pre-push review of fm/tl at 93d577a\n",
+        )
+        .unwrap();
+        let sha = "93d577ab0c7124172e1414f7d943252f9bc961f9";
+        fs::write(
+            state.join("tl.gate-pass"),
+            format!("head={sha} ts=1793440890\n"),
+        )
+        .unwrap();
+        write_backlog(
+            &home,
+            "- [ ] tl - timelines (repo: miles) (kind: ship)\n  plan: estimate=35m\n",
+        );
+        fs::create_dir_all(home.join("data").join("tl")).unwrap();
+        fs::write(home.join("data").join("tl").join("report.md"), "# r\n").unwrap();
+
+        let snap = agent_snapshot(WORKTREE, &["claude"]);
+        let (_, rows) = resolve(&home, &snap);
+        let row = &rows[0];
+        assert_eq!(row.task_kind.as_deref(), Some("ship"));
+        assert_eq!(row.mode.as_deref(), Some("direct-PR"));
+        assert_eq!(row.branch.as_deref(), Some("fm/tl"));
+        assert_eq!(
+            row.registered_pr.as_deref(),
+            Some("https://github.com/o/r/pull/8")
+        );
+        assert_eq!(row.spawned_at, Some(1_793_440_277));
+        let verbs: Vec<&str> = row.status_log.iter().map(|l| l.verb.as_str()).collect();
+        assert_eq!(verbs, ["working", "paused"]);
+        assert_eq!(row.status_log[1].at, Some(1_793_440_900));
+        assert_eq!(
+            row.gate_pass,
+            Some(GatePass {
+                head: sha.to_string(),
+                ts: Some(1_793_440_890)
+            })
+        );
+        assert_eq!(row.estimate_min, Some(35));
+        assert!(row.report_at.is_some_and(|t| t > 1_700_000_000));
+
+        let json = serde_json::to_value(row).unwrap();
+        assert_eq!(json["task_kind"], "ship");
+        assert_eq!(json["status_log"][1]["verb"], "paused");
+        assert_eq!(json["gate_pass"]["head"], sha);
     }
 
     #[test]
