@@ -311,7 +311,7 @@ so the terminal UI and its dependencies are not compiled:
 
 ```toml
 [dependencies]
-crew-watch = { version = "0.4", default-features = false }
+crew-watch = { version = "0.5", default-features = false }
 ```
 
 Point a `crew_watch::fleet::Sampler` at a firstmate home (any home: the library
@@ -325,6 +325,14 @@ off an async runtime's worker threads. CPU figures are measured between two
 samples, so the first one reads 0%. Every row carries the raw stamps behind its `STATE` (the last status
 line's verb and `[at=]` time, the turn record's `ts=`) so a caller can judge
 staleness itself, plus the pull request firstmate's merge poll is armed for.
+
+Since 0.5.0 a fleet row also carries what a reader needs to tell where a task
+stands in its delivery: the task's kind, mode, branch, registered PR and launch
+time from its record, its whole status log (verb, time, decision key and text
+per line), its last green local gate, the planner's estimate from the backlog
+and when a scout's report was written. `crew_watch::ledger::LedgerTail` reads
+firstmate's fleet activity ledger incrementally, for tasks that have already
+been cleaned up.
 
 ## Requirements
 

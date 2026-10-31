@@ -165,6 +165,140 @@ pub fn parse_status_at(line: &str) -> Option<u64> {
     value.parse().ok()
 }
 
+/// One line of a task's `.status` log, read as firstmate's classifier
+/// (`bin/fm-classify-lib.sh`) reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StatusLine {
+    /// The line's verb (`working`, `needs-decision`, `resolved`, ...), ported
+    /// from firstmate's `status_line_verb`: the words before the first colon
+    /// and the first `[` tag, with the `corr=<16 hex>` tokens firstmate's
+    /// own tooling writes after the first word dropped. Anything else stays,
+    /// so a prose head (`working on it: ...`) is not a verb any reader
+    /// should act on.
+    pub verb: String,
+    /// The `[at=<epoch>]` stamp, as [`parse_status_at`] reads it.
+    pub at: Option<u64>,
+    /// The stated decision key: a complete `[key=<slug>]` token before the
+    /// line's first colon, else one at the head of the text after it. A slug
+    /// outside `A-Za-z0-9._-` is `invalid-key`, the bucket firstmate files it
+    /// under; no token is `None` (firstmate's `default` key).
+    pub key: Option<String>,
+    /// The text after the line's first colon, leading blanks trimmed, with a
+    /// note-head key token removed when it is the line's key; the whole line
+    /// when it has no colon.
+    pub text: String,
+}
+
+/// Every non-empty line of a `.status` log, oldest first. A line without a
+/// verb (only blanks before its colon) is skipped.
+pub fn parse_status_log(content: &str) -> Vec<StatusLine> {
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(parse_status_log_line)
+        .collect()
+}
+
+/// One status line as a [`StatusLine`]; `None` when it has no verb.
+pub fn parse_status_log_line(line: &str) -> Option<StatusLine> {
+    let verb = line_verb(line)?;
+    let unstamped = unstamped(line);
+    let (key, text) = match unstamped.split_once(':') {
+        None => (key_before_colon(&unstamped), unstamped.clone()),
+        Some((head, rest)) => {
+            let note = rest.trim_start();
+            match key_before_colon(head) {
+                Some(key) => (Some(key), note.to_string()),
+                None => match note_head_key(note) {
+                    Some((raw, after)) if slug_ok(raw) => {
+                        (Some(raw.to_string()), after.trim_start().to_string())
+                    }
+                    Some(_) => (Some(INVALID_KEY.to_string()), note.to_string()),
+                    None => (None, note.to_string()),
+                },
+            }
+        }
+    };
+    Some(StatusLine {
+        verb,
+        at: parse_status_at(line),
+        key,
+        text,
+    })
+}
+
+/// A status line's verb (see [`StatusLine::verb`]); `None` when the head is
+/// blank.
+fn line_verb(line: &str) -> Option<String> {
+    let head = line.split(':').next()?.split('[').next()?;
+    let mut words = head.split_whitespace();
+    let mut verb = words.next()?.to_string();
+    for word in words {
+        if !is_corr_token(word) {
+            verb.push(' ');
+            verb.push_str(word);
+        }
+    }
+    Some(verb)
+}
+
+/// `corr=` and exactly 16 hex digits: the unbracketed correlation token
+/// firstmate's pending-reply library writes (`_fm_classify_is_corr_token`).
+fn is_corr_token(word: &str) -> bool {
+    word.strip_prefix("corr=")
+        .is_some_and(|hex| hex.len() == 16 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// The key bucket firstmate files a stated key with a malformed slug under.
+const INVALID_KEY: &str = "invalid-key";
+
+/// The line with its `[at=…]` stamps removed, ported from firstmate's
+/// `_fm_status_unstamped`: each stamp whose prefix holds no colon goes,
+/// with one blank before it, so a stamp like `[at=10:30]` cannot move the
+/// head/note separator.
+fn unstamped(line: &str) -> String {
+    let mut keep = String::new();
+    let mut rest = line;
+    while let Some(start) = rest.find("[at=") {
+        let Some(close) = rest[start..].find(']') else {
+            break;
+        };
+        let before = &rest[..start];
+        if before.contains(':') {
+            break;
+        }
+        keep.push_str(before.strip_suffix(' ').unwrap_or(before));
+        rest = &rest[start + close + 1..];
+    }
+    keep.push_str(rest);
+    keep
+}
+
+/// The key of a complete `[key=…]` token in a line's head (the part before
+/// its first colon).
+fn key_before_colon(head: &str) -> Option<String> {
+    let rest = &head[head.find("[key=")? + "[key=".len()..];
+    let (raw, _) = rest.split_once(']')?;
+    Some(if slug_ok(raw) {
+        raw.to_string()
+    } else {
+        INVALID_KEY.to_string()
+    })
+}
+
+/// A complete `[key=…]` token at the very head of a note: its raw slug and
+/// the text after it.
+fn note_head_key(note: &str) -> Option<(&str, &str)> {
+    note.strip_prefix("[key=")?.split_once(']')
+}
+
+fn slug_ok(slug: &str) -> bool {
+    !slug.is_empty()
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 /// A well-formed, gen-valid firstmate busy-state record: the turn state
 /// (`None` for the contract's `unknown`) and its `ts=` stamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,6 +403,8 @@ pub struct TaskState {
     pub status_at: Option<u64>,
     /// `ts=` stamp of the gen-valid busy-state record.
     pub busy_ts: Option<u64>,
+    /// Every line of the `.status` log, oldest first.
+    pub status_log: Vec<StatusLine>,
 }
 
 /// Read and classify the activity for one fleet task under a firstmate
@@ -278,7 +414,8 @@ pub fn load_activity(fm_home: &Path, stem: &str) -> Activity {
     load_task_state(fm_home, stem).activity
 }
 
-/// [`load_activity`] keeping the status and busy-state stamps it read.
+/// [`load_activity`] keeping the status and busy-state stamps it read, and
+/// the whole status log.
 pub fn load_task_state(fm_home: &Path, stem: &str) -> TaskState {
     let state = fm_home.join("state");
     let status = fs::read_to_string(state.join(format!("{stem}.status"))).ok();
@@ -297,6 +434,7 @@ pub fn load_task_state(fm_home: &Path, stem: &str) -> TaskState {
         status_verb,
         status_at,
         busy_ts: busy.map(|b| b.ts),
+        status_log: status.as_deref().map(parse_status_log).unwrap_or_default(),
     }
 }
 
@@ -427,6 +565,125 @@ mod tests {
         );
     }
 
+    // --- the whole status log ---
+
+    fn line(verb: &str, at: Option<u64>, key: Option<&str>, text: &str) -> StatusLine {
+        StatusLine {
+            verb: verb.to_string(),
+            at,
+            key: key.map(str::to_string),
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn status_log_reads_every_line_oldest_first() {
+        let log = "working [at=1793434552]: setup done\n\
+                   \n\
+                   paused [at=1793435067]: awaiting pre-push review of fm/x at a5416b7\n\
+                   needs-decision [at=1793435100] [key=api-shape]: REST or RPC?\n\
+                   resolved [key=api-shape] [at=1793435200]: RPC\n\
+                   done [at=1793436166]: PR https://github.com/o/r/pull/51\n";
+        assert_eq!(
+            parse_status_log(log),
+            vec![
+                line("working", Some(1_793_434_552), None, "setup done"),
+                line(
+                    "paused",
+                    Some(1_793_435_067),
+                    None,
+                    "awaiting pre-push review of fm/x at a5416b7"
+                ),
+                line(
+                    "needs-decision",
+                    Some(1_793_435_100),
+                    Some("api-shape"),
+                    "REST or RPC?"
+                ),
+                line("resolved", Some(1_793_435_200), Some("api-shape"), "RPC"),
+                line(
+                    "done",
+                    Some(1_793_436_166),
+                    None,
+                    "PR https://github.com/o/r/pull/51"
+                ),
+            ]
+        );
+        assert!(parse_status_log("").is_empty());
+        assert!(parse_status_log(": no verb\n  \n").is_empty());
+    }
+
+    #[test]
+    fn status_log_keys_follow_firstmates_two_positions() {
+        // The documented position, and a complete token at the note's head.
+        let at_head = parse_status_log_line("needs-decision: [key=k1] which one?").unwrap();
+        assert_eq!(at_head.key.as_deref(), Some("k1"));
+        assert_eq!(at_head.text, "which one?");
+        // Both: the before-colon token wins and the note keeps its own.
+        let both = parse_status_log_line("needs-decision [key=a]: [key=b] x").unwrap();
+        assert_eq!(both.key.as_deref(), Some("a"));
+        assert_eq!(both.text, "[key=b] x");
+        // A token deeper in the note is prose, not a key.
+        let prose = parse_status_log_line("resolved: answered, see [key=x]").unwrap();
+        assert_eq!(prose.key, None);
+        // A malformed slug folds under firstmate's invalid-key bucket.
+        let bad = parse_status_log_line("needs-decision [key=a b]: x").unwrap();
+        assert_eq!(bad.key.as_deref(), Some("invalid-key"));
+        let bad_head = parse_status_log_line("needs-decision: [key=a/b] x").unwrap();
+        assert_eq!(bad_head.key.as_deref(), Some("invalid-key"));
+        assert_eq!(bad_head.text, "[key=a/b] x");
+        // An unclosed token is no token.
+        let open = parse_status_log_line("needs-decision [key=abc: x").unwrap();
+        assert_eq!(open.key, None);
+    }
+
+    #[test]
+    fn status_log_text_survives_stamps_with_colons_and_lines_without_one() {
+        // A readable stamp's colons do not end the head early.
+        let l = parse_status_log_line("working [at=10:30] [key=k]: note").unwrap();
+        assert_eq!((l.verb.as_str(), l.at), ("working", None));
+        assert_eq!(l.key.as_deref(), Some("k"));
+        assert_eq!(l.text, "note");
+        // A stamp after the separator is note text, kept as written.
+        let l = parse_status_log_line("done [at=5]: merged [at=10:30] at noon").unwrap();
+        assert_eq!(
+            (l.at, l.text.as_str()),
+            (Some(5), "merged [at=10:30] at noon")
+        );
+        let l = parse_status_log_line("done: merged [at=10:30] at noon").unwrap();
+        assert_eq!(l.text, "merged [at=10:30] at noon");
+        // No colon: the whole (unstamped) line is the text.
+        let l = parse_status_log_line("working [at=1793381955] still going").unwrap();
+        assert_eq!(l.verb, "working");
+        assert_eq!(l.at, None); // firstmate reads no stamp without a colon
+        assert_eq!(l.text, "working still going");
+    }
+
+    #[test]
+    fn status_log_verbs_drop_only_correlation_tokens() {
+        let l = parse_status_log_line(
+            "needs-decision corr=0123456789abcdef [key=texte]: which wall text?",
+        )
+        .unwrap();
+        assert_eq!(l.verb, "needs-decision");
+        assert_eq!(l.key.as_deref(), Some("texte"));
+        // A wrong-length token, or prose, stays part of the head: not a verb.
+        assert_eq!(
+            parse_status_log_line("resolved corr=0123 [key=k]: x")
+                .unwrap()
+                .verb,
+            "resolved corr=0123"
+        );
+        assert_eq!(
+            parse_status_log_line("working on it: x").unwrap().verb,
+            "working on it"
+        );
+        assert_eq!(
+            parse_status_log_line("working[key=k]: glued").unwrap().verb,
+            "working"
+        );
+    }
+
     // --- busy-state parsing ---
 
     #[test]
@@ -497,6 +754,7 @@ mod tests {
                 status_verb: Some("working".to_string()),
                 status_at: Some(1_786_790_700),
                 busy_ts: Some(1_786_790_704),
+                status_log: vec![line("working", Some(1_786_790_700), None, "go")],
             }
         );
         // Nothing on disk: the working-no-signal state and no stamps.

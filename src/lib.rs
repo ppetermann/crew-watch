@@ -31,6 +31,8 @@ pub mod config;
 pub mod detect;
 pub mod fleet;
 pub mod format_util;
+pub mod gate;
+pub mod ledger;
 mod macos;
 pub mod meta;
 pub mod model;

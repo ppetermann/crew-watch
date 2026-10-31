@@ -27,6 +27,31 @@ pub struct TaskRecord {
     pub project: Option<String>,
     pub harness: Option<String>,
     pub window: Option<String>,
+    /// Task kind: `ship`, `scout`, `secondmate`, ...
+    pub kind: Option<String>,
+    /// Delivery mode of a ship task (`direct-PR`, `no-mistakes`, ...).
+    pub mode: Option<String>,
+    /// The task's branch.
+    pub branch: Option<String>,
+    /// The PR URL firstmate registered for the task.
+    pub pr: Option<String>,
+    /// The incarnation token firstmate stamps at launch,
+    /// `s<epoch>.<pid>.<n>`; see [`TaskRecord::spawned_at`].
+    pub spawn_gen: Option<String>,
+}
+
+impl TaskRecord {
+    /// Unix time the task's current incarnation was launched: the epoch of
+    /// `spawn_gen=s<epoch>.…`, read as firstmate's effort ledger reads it
+    /// (`s` then digits then `.`). `None` when absent or malformed.
+    pub fn spawned_at(&self) -> Option<u64> {
+        let rest = self.spawn_gen.as_deref()?.strip_prefix('s')?;
+        let (epoch, _) = rest.split_once('.')?;
+        if epoch.is_empty() || !epoch.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        epoch.parse().ok()
+    }
 }
 
 /// Parse one `*.meta` file's contents. `task_id` falls back to the empty
@@ -45,6 +70,11 @@ pub fn parse_meta(content: &str) -> TaskRecord {
             "project" => r.project = Some(val),
             "harness" => r.harness = Some(val),
             "window" => r.window = Some(val),
+            "kind" => r.kind = Some(val),
+            "mode" => r.mode = Some(val),
+            "branch" => r.branch = Some(val),
+            "pr" => r.pr = Some(val).filter(|v| !v.is_empty()),
+            "spawn_gen" => r.spawn_gen = Some(val),
             _ => {}
         }
     }
@@ -123,6 +153,45 @@ busy_gen=g1786446653.28322.9129\n";
         );
         assert_eq!(r.harness.as_deref(), Some("opencode"));
         assert_eq!(r.window.as_deref(), Some("firstmate:fm-crew-watch-v1"));
+    }
+
+    #[test]
+    fn parse_reads_the_task_shape_and_launch_time() {
+        let r = parse_meta(&format!(
+            "{SAMPLE}branch=fm/x\npr=https://github.com/o/r/pull/9\nspawn_gen=s1793440277.2625895.7708\n"
+        ));
+        assert_eq!(r.kind.as_deref(), Some("ship"));
+        assert_eq!(r.mode.as_deref(), Some("no-mistakes"));
+        assert_eq!(r.branch.as_deref(), Some("fm/x"));
+        assert_eq!(r.pr.as_deref(), Some("https://github.com/o/r/pull/9"));
+        assert_eq!(r.spawned_at(), Some(1_793_440_277));
+        // An empty pr= is no PR.
+        assert_eq!(parse_meta("pr=\n").pr, None);
+    }
+
+    #[test]
+    fn spawned_at_needs_the_s_epoch_dot_shape() {
+        let at = |g: &str| {
+            TaskRecord {
+                spawn_gen: Some(g.to_string()),
+                ..TaskRecord::default()
+            }
+            .spawned_at()
+        };
+        assert_eq!(at("s5.1.1"), Some(5));
+        for bad in [
+            "",
+            "s",
+            "s.1",
+            "1793440277.1.1",
+            "g1793440277.1.1",
+            "s17x.1",
+            "s+5.1.1",
+            "s1793440277",
+        ] {
+            assert_eq!(at(bad), None, "{bad:?}");
+        }
+        assert_eq!(TaskRecord::default().spawned_at(), None);
     }
 
     #[test]
