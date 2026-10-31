@@ -644,6 +644,14 @@ mod tests {
         assert_eq!((l.verb.as_str(), l.at), ("working", None));
         assert_eq!(l.key.as_deref(), Some("k"));
         assert_eq!(l.text, "note");
+        // A stamp after the separator is note text, kept as written.
+        let l = parse_status_log_line("done [at=5]: merged [at=10:30] at noon").unwrap();
+        assert_eq!(
+            (l.at, l.text.as_str()),
+            (Some(5), "merged [at=10:30] at noon")
+        );
+        let l = parse_status_log_line("done: merged [at=10:30] at noon").unwrap();
+        assert_eq!(l.text, "merged [at=10:30] at noon");
         // No colon: the whole (unstamped) line is the text.
         let l = parse_status_log_line("working [at=1793381955] still going").unwrap();
         assert_eq!(l.verb, "working");

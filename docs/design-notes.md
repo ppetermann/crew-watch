@@ -21,9 +21,11 @@ I/O is a single `/proc` pass plus a handful of small best-effort file reads.
 | `src/procfs.rs` | pure `/proc` parsers + `collect()`, which reads `/proc` exactly once per tick |
 | `src/detect.rs` | the `AGENT_KINDS` detection table, candidate extraction, and subtree aggregation into sessions |
 | `src/meta.rs` | firstmate `state/*.meta` record parsing |
-| `src/titles.rs` | task titles from `data/backlog.md` and `data/<task>/brief.md` |
+| `src/titles.rs` | task titles from `data/backlog.md` and `data/<task>/brief.md`, and the backlog's entries (markers, note, `estimate=<N>m`) |
 | `src/taskinfo.rs` | the layered `TASK` resolution |
-| `src/activity.rs` | `STATE` classification from the status verb and the turn record |
+| `src/activity.rs` | `STATE` classification from the status verb and the turn record, and the whole status log (verb, stamp, decision key, text per line) |
+| `src/gate.rs` | firstmate `state/<stem>.gate-pass` local-gate marker parsing |
+| `src/ledger.rs` | firstmate's fleet activity ledger, read incrementally as it grows |
 | `src/prpoll.rs` | firstmate `state/<stem>.pr-poll` merge-poll sidecar parsing |
 | `src/model.rs` | `--model` extraction from argv |
 | `src/project.rs` | git-repository project name from a working directory |

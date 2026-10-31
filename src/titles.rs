@@ -45,6 +45,12 @@ impl TaskTitles {
 /// Load task titles from a firstmate home. Never fails: a missing dir or
 /// unreadable file is silently skipped. Backlog titles win over brief titles.
 pub fn load_task_titles(home: &Path) -> TaskTitles {
+    load_task_titles_with(home, &load_backlog_entries(home))
+}
+
+/// [`load_task_titles`] with the backlog already read, so a caller that also
+/// wants the [`BacklogEntry`]s reads `data/backlog.md` once.
+pub fn load_task_titles_with(home: &Path, backlog: &[BacklogEntry]) -> TaskTitles {
     let mut map: HashMap<String, String> = HashMap::new();
 
     // Layer 2 (lower priority): brief.md first sentences.
@@ -67,11 +73,8 @@ pub fn load_task_titles(home: &Path) -> TaskTitles {
     }
 
     // Layer 1 (higher priority): backlog titles overwrite brief titles.
-    let backlog_path = home.join("data").join("backlog.md");
-    if let Ok(content) = fs::read_to_string(&backlog_path) {
-        for (id, title) in parse_backlog(&content) {
-            map.insert(id, title);
-        }
+    for entry in backlog {
+        map.insert(entry.id.clone(), entry.title.clone());
     }
 
     TaskTitles(map)
@@ -198,11 +201,18 @@ fn checkbox(line: &str) -> Option<(String, String, bool)> {
     (!title.is_empty()).then(|| (id.trim().to_string(), title, mark != ' '))
 }
 
-/// The value of a ` (name: value)` marker on a checkbox line.
+/// The value of a `(name: value)` marker on a checkbox line, read as firstmate's
+/// own backlog reader (`bin/fm-fleet-snapshot.sh`, `metadata`) reads it: the
+/// **last** `name:` right after a `(`, or after a `,` and any blanks; its value
+/// runs to the next `,` or `)` (or the line's end), trimmed. Empty is none.
 fn marker(line: &str, name: &str) -> Option<String> {
-    let open = format!(" ({name}: ");
-    let rest = &line[line.find(&open)? + open.len()..];
-    let value = rest[..rest.find(')')?].trim();
+    let key = format!("{name}:");
+    let at = line.rmatch_indices(&key).map(|(i, _)| i).find(|&i| {
+        let before = &line[..i];
+        before.ends_with('(') || before.trim_end().ends_with(',')
+    })?;
+    let rest = &line[at + key.len()..];
+    let value = rest[..rest.find([',', ')']).unwrap_or(rest.len())].trim();
     (!value.is_empty()).then(|| value.to_string())
 }
 
@@ -332,6 +342,39 @@ mod tests {
             .map(|e| (e.id.clone(), e.title.clone()))
             .collect();
         assert_eq!(pairs, parse_backlog(ENTRIES));
+    }
+
+    #[test]
+    fn markers_are_read_as_firstmates_backlog_reader_reads_them() {
+        let m = |line: &str, name: &str| marker(line, name);
+        // The last marker wins, so a title cannot impersonate one.
+        assert_eq!(
+            m("- [ ] t - Fix the (kind: ui) crash (kind: ship)", "kind").as_deref(),
+            Some("ship")
+        );
+        // A comma ends the value, and may start another marker in the same group.
+        assert_eq!(
+            m("- [ ] t - x (kind: ship, repo: miles)", "kind").as_deref(),
+            Some("ship")
+        );
+        assert_eq!(
+            m("- [ ] t - x (kind: ship,repo: miles)", "repo").as_deref(),
+            Some("miles")
+        );
+        // `hold-kind:` is not `kind:`.
+        assert_eq!(m("- [ ] t - x (hold-kind: captain)", "kind"), None);
+        assert_eq!(
+            m("- [ ] t - x (kind: scout) (hold-kind: captain)", "kind").as_deref(),
+            Some("scout")
+        );
+        assert_eq!(m("- [ ] t - x (kind: )", "kind"), None);
+        assert_eq!(m("- [ ] t - x kind: ship", "kind"), None);
+        assert_eq!(m("- [ ] t - x ( kind: ship)", "kind"), None);
+        // An unclosed group runs to the end of the line.
+        assert_eq!(
+            m("- [ ] t - x (repo: miles", "repo").as_deref(),
+            Some("miles")
+        );
     }
 
     #[test]

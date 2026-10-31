@@ -32,7 +32,7 @@ use crate::model::resolve_model;
 use crate::procfs::{collect, core_percents, Snapshot};
 use crate::prpoll::{load_pr_poll, PrPoll};
 use crate::taskinfo::TaskInfo;
-use crate::titles::{load_backlog_entries, load_task_titles, BacklogEntry, TaskTitles};
+use crate::titles::{load_backlog_entries, load_task_titles_with, BacklogEntry, TaskTitles};
 
 /// Fleet sampler over one firstmate home. See the module header.
 pub struct Sampler {
@@ -135,8 +135,8 @@ impl Sampler {
     /// it only leaves rows without fleet data.
     pub fn new(fm_home: PathBuf) -> Self {
         let records = load_fm_home(&fm_home);
-        let titles = load_task_titles(&fm_home);
         let backlog = load_backlog_entries(&fm_home);
+        let titles = load_task_titles_with(&fm_home, &backlog);
         Self {
             fm_home,
             records,
@@ -196,8 +196,8 @@ impl Sampler {
     /// than retaining stale labels or propagating an error.
     fn reload_fleet(&mut self) {
         self.records = load_fm_home(&self.fm_home);
-        self.titles = load_task_titles(&self.fm_home);
         self.backlog = load_backlog_entries(&self.fm_home);
+        self.titles = load_task_titles_with(&self.fm_home, &self.backlog);
     }
 
     pub fn fm_home(&self) -> &Path {
@@ -458,7 +458,7 @@ mod tests {
 
     fn resolve(home: &Path, snap: &Snapshot) -> (Vec<Session>, Vec<AgentRow>) {
         let records = load_fm_home(home);
-        let titles = load_task_titles(home);
+        let titles = crate::titles::load_task_titles(home);
         let mut sessions = build_sessions(snap, None);
         let backlog = load_backlog_entries(home);
         let rows = resolve_sessions(home, &records, &titles, &backlog, snap, &mut sessions);
@@ -562,7 +562,8 @@ mod tests {
         .unwrap();
         write_backlog(
             &home,
-            "- [ ] tl - timelines (repo: miles) (kind: ship)\n  plan: estimate=35m\n",
+            "- [ ] other - another task (repo: x) (kind: ship)\n  estimate=90m\n\
+             - [ ] tl - timelines (repo: miles) (kind: ship)\n  plan: estimate=35m\n",
         );
         fs::create_dir_all(home.join("data").join("tl")).unwrap();
         fs::write(home.join("data").join("tl").join("report.md"), "# r\n").unwrap();
