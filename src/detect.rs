@@ -4,13 +4,20 @@
 //! process's command name (basename of `argv[0]`, with a fallback through known
 //! interpreters like `node`). Adding a new runtime is one table row.
 //!
-//! A candidate whose path runs through a directory named exactly `fakebin`
-//! is never an agent: that is the stand-in tool directory test suites put on
-//! `PATH` (firstmate's `fm_fakebin` only creates that directory; its
-//! supervision-host suite then links `<tmp>/fakebin/fakebin/claude` to `bash`
-//! and runs it by full path), and a stub there would otherwise show up as a
-//! live worker row.
-//! See [`is_test_stub_path`].
+//! Test stand-ins are not agents. Test suites run fake `claude`/`codex`/...
+//! binaries (firstmate's supervision-host suite links
+//! `<tmp>/fakebin/fakebin/claude` to `bash` and runs it by full path), which
+//! would otherwise show up as live worker rows. Two narrow, positive signals
+//! mark a candidate path as a stand-in ([`is_stand_in_path`]):
+//! - a parent directory named exactly `fakebin`, the stub-tool directory
+//!   convention (pure check, [`is_test_stub_path`]); or
+//! - an ancestor directory holding a `.fm-test-fixture` file, the marker
+//!   firstmate's `fm_test_tmproot` writes into every test fixture root
+//!   (covers stand-ins such as a live suite's `<lab>/harness/claude`).
+//!
+//! A process that has exited but not been reaped (a zombie) is never an agent
+//! either: its argv is already gone, so the comm fallback below would
+//! otherwise re-detect a dead stand-in by its bare name.
 //!
 //! Aggregation attributes every process to its *nearest enclosing agent*:
 //! - each detected agent becomes one row (a "session"), and
@@ -118,6 +125,32 @@ pub fn is_test_stub_path(path: &str) -> bool {
         .is_some_and(|dir| dir.components().any(|c| c.as_os_str() == TEST_STUB_DIR))
 }
 
+/// Marker file firstmate's test library (`fm_test_tmproot`) writes into the
+/// root of every test fixture directory.
+const TEST_FIXTURE_MARKER: &str = ".fm-test-fixture";
+
+/// True when an ancestor directory of the absolute `path` holds firstmate's
+/// test-fixture marker. Relative and bare paths carry no location and are
+/// never in a fixture. Reads the filesystem, so [`detect_kind`] calls it only
+/// for a candidate that already matched an agent name.
+fn in_test_fixture(path: &str) -> bool {
+    let p = Path::new(path);
+    if !p.is_absolute() {
+        return false;
+    }
+    p.ancestors()
+        .skip(1)
+        .any(|dir| dir.join(TEST_FIXTURE_MARKER).is_file())
+}
+
+/// True when the program path `path` is a test stand-in rather than a real
+/// agent install: inside a `fakebin` directory ([`is_test_stub_path`]) or
+/// under a firstmate test fixture root (a `.fm-test-fixture` marker in an
+/// ancestor directory).
+pub fn is_stand_in_path(path: &str) -> bool {
+    is_test_stub_path(path) || in_test_fixture(path)
+}
+
 /// The argv tokens that name the program: `argv[0]`, and when `argv[0]` is an
 /// interpreter, the first following non-flag argument too.
 fn candidate_paths(cmdline: &[String]) -> Vec<&str> {
@@ -137,25 +170,32 @@ fn candidate_paths(cmdline: &[String]) -> Vec<&str> {
 /// Build candidate command basenames from argv. Includes `argv[0]`'s basename,
 /// and when `argv[0]` is an interpreter, the first following non-flag argument's
 /// basename too.
+///
+/// These are unfiltered: detection additionally skips test stand-in paths
+/// ([`is_stand_in_path`]), which basenames no longer show. To decide whether a
+/// command line is an agent, use [`detect_kind`], not these names with
+/// [`AGENT_KINDS`].
 pub fn extract_candidates(cmdline: &[String]) -> Vec<String> {
     candidate_paths(cmdline).into_iter().map(basename).collect()
 }
 
-/// Detect which agent runtime a command line belongs to. Candidates inside a
-/// test-stub directory ([`is_test_stub_path`]) are skipped.
+/// Detect which agent runtime a command line belongs to. A candidate that is a
+/// test stand-in ([`is_stand_in_path`]) is skipped.
 pub fn detect_kind(cmdline: &[String]) -> Option<&'static AgentKind> {
-    let cands: Vec<String> = candidate_paths(cmdline)
-        .into_iter()
-        .filter(|p| !is_test_stub_path(p))
-        .map(basename)
-        .collect();
-    for kind in AGENT_KINDS {
-        for matcher in kind.matches {
-            for cand in &cands {
-                if matcher.matches(cand) {
-                    return Some(kind);
-                }
-            }
+    for path in candidate_paths(cmdline) {
+        if is_test_stub_path(path) {
+            continue;
+        }
+        let name = basename(path);
+        let Some(kind) = AGENT_KINDS
+            .iter()
+            .find(|k| k.matches.iter().any(|m| m.matches(&name)))
+        else {
+            continue;
+        };
+        // The filesystem check runs only for a name that matched.
+        if !in_test_fixture(path) {
+            return Some(kind);
         }
     }
     None
@@ -220,6 +260,11 @@ pub fn build_sessions(curr: &Snapshot, prev: Option<&Snapshot>) -> Vec<Session> 
     // 1. Detect every agent process.
     let mut agents: HashMap<i32, &'static AgentKind> = HashMap::new();
     for (&pid, entry) in &curr.procs {
+        // A zombie runs nothing; and with its argv gone, the comm fallback
+        // would re-detect a dead stand-in by its bare name.
+        if entry.stat.zombie {
+            continue;
+        }
         let mut kind = detect_kind(&entry.cmdline);
         // Kernel threads have no cmdline; fall back to comm as a last resort.
         if kind.is_none() && entry.cmdline.is_empty() && !entry.stat.comm.is_empty() {
@@ -482,6 +527,58 @@ mod tests {
         assert!(!is_test_stub_path("/usr/bin/fakebin"));
         assert!(!is_test_stub_path("/tmp/fakebin2/claude"));
         assert!(!is_test_stub_path(""));
+    }
+
+    #[test]
+    fn detect_skips_stand_ins_under_a_fixture_root() {
+        // firstmate's live supervision-host suite: `<lab>/harness/claude`,
+        // where `<lab>` is an `fm_test_tmproot` root holding the marker.
+        let lab = tempfile_dir("fixture");
+        std::fs::write(lab.join(TEST_FIXTURE_MARKER), "1\n").unwrap();
+        std::fs::create_dir_all(lab.join("harness")).unwrap();
+        let stub = lab.join("harness/claude").to_string_lossy().into_owned();
+        assert!(is_stand_in_path(&stub));
+        assert!(detect_kind(&argv(&[&stub, "-c", "true"])).is_none());
+        assert!(detect_kind(&argv(&["node", &stub])).is_none());
+
+        // The same shape without the marker is a real install.
+        let plain = tempfile_dir("plain");
+        std::fs::create_dir_all(plain.join("harness")).unwrap();
+        let real = plain.join("harness/claude").to_string_lossy().into_owned();
+        assert!(!is_stand_in_path(&real));
+        assert_eq!(detect_kind(&argv(&[&real])).map(|k| k.id), Some("claude"));
+        // Relative and bare paths carry no location, so are never in a fixture.
+        assert!(!in_test_fixture("claude"));
+        assert!(!in_test_fixture("harness/claude"));
+
+        let _ = std::fs::remove_dir_all(lab);
+        let _ = std::fs::remove_dir_all(plain);
+    }
+
+    /// A fresh, uniquely named directory under the system temp dir.
+    fn tempfile_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "crew-watch-detect-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn zombie_stand_in_is_not_a_session() {
+        // An exited, unreaped fakebin stub: empty cmdline, comm still `claude`.
+        let mut z = agent(2, 1, "claude", &[]);
+        z.stat.zombie = true;
+        let procs = vec![(1, agent(1, 0, "claude", &["claude"])), (2, z)];
+        let sessions = build_sessions(&snap(procs, 2000), None);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].pid, 1);
+        // Without the zombie flag the comm fallback would have detected it.
+        let procs = vec![(2, agent(2, 1, "claude", &[]))];
+        assert_eq!(build_sessions(&snap(procs, 2000), None).len(), 1);
     }
 
     #[test]
