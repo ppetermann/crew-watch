@@ -6,8 +6,10 @@
 //!
 //! A candidate whose path runs through a directory named exactly `fakebin`
 //! is never an agent: that is the stand-in tool directory test suites put on
-//! `PATH` (firstmate's `fm_fakebin` builds `<tmp>/fakebin/claude` as a symlink
-//! to `bash`), and a stub there would otherwise show up as a live worker row.
+//! `PATH` (firstmate's `fm_fakebin` only creates that directory; its
+//! supervision-host suite then links `<tmp>/fakebin/fakebin/claude` to `bash`
+//! and runs it by full path), and a stub there would otherwise show up as a
+//! live worker row.
 //! See [`is_test_stub_path`].
 //!
 //! Aggregation attributes every process to its *nearest enclosing agent*:
