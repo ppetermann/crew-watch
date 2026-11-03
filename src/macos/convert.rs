@@ -82,6 +82,8 @@ pub struct RawProc {
     pub run_secs: u64,
     pub cmdline: Vec<String>,
     pub cwd: Option<std::path::PathBuf>,
+    /// sysinfo reports the process as a zombie.
+    pub zombie: bool,
 }
 
 /// utime = ms/10 (centiseconds == ticks at hz 100); stime = 0 (macOS gives
@@ -97,6 +99,7 @@ pub fn to_proc_entry(raw: RawProc, uptime_secs: f64, tick_hz: u64) -> ProcEntry 
             stime: 0,
             starttime: starttime_ticks(uptime_secs, raw.run_secs, tick_hz),
             rss_pages: raw.mem_bytes / 4096,
+            zombie: raw.zombie,
         },
         cmdline: raw.cmdline,
         cwd: raw.cwd,
@@ -188,6 +191,7 @@ mod tests {
                 "glm-5.2".to_string(),
             ],
             cwd: Some(std::path::PathBuf::from("/Users/me/proj")),
+            zombie: false,
         };
         let e = to_proc_entry(raw, 1_000.0, CLK_TZ);
         assert_eq!(e.stat.pid, 42);
@@ -222,6 +226,7 @@ mod tests {
             run_secs: 100,
             cmdline: vec!["claude".to_string()],
             cwd: None,
+            zombie: false,
         };
         let mut snap0 = Snapshot {
             cpus: accum.to_cpu_lines(),

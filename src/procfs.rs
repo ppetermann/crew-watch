@@ -29,6 +29,9 @@ pub struct ProcStat {
     pub stime: u64,
     pub starttime: u64,
     pub rss_pages: u64,
+    /// The process has exited but not been reaped (state `Z`, or `X` dead):
+    /// it runs nothing, and its argv is already gone.
+    pub zombie: bool,
 }
 
 impl ProcStat {
@@ -122,6 +125,7 @@ pub fn parse_proc_pid_stat(pid: i32, content: &str) -> Option<ProcStat> {
         stime: get(12).unwrap_or(0),
         starttime: get(19).unwrap_or(0),
         rss_pages: get(21).unwrap_or(0),
+        zombie: matches!(rest.first(), Some(&"Z") | Some(&"X")),
     })
     .map(|s| if s.pid == 0 { ProcStat { pid, ..s } } else { s })
 }
@@ -337,6 +341,17 @@ mod tests {
         assert_eq!(s.stime, 7);
         assert_eq!(s.starttime, 99900);
         assert_eq!(s.rss_pages, 1);
+        assert!(!s.zombie);
+    }
+
+    #[test]
+    fn stat_zombie_state() {
+        let z = "77 (claude) Z 10 0 0 0 -1 4194308 0 0 0 0 0 0 0 0 20 0 1 0 500 0 0";
+        assert!(parse_proc_pid_stat(77, z).expect("parsed").zombie);
+        let x = z.replacen(" Z ", " X ", 1);
+        assert!(parse_proc_pid_stat(77, &x).expect("parsed").zombie);
+        let s = z.replacen(" Z ", " S ", 1);
+        assert!(!parse_proc_pid_stat(77, &s).expect("parsed").zombie);
     }
 
     #[test]

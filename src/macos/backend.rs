@@ -85,6 +85,7 @@ pub fn collect() -> Snapshot {
                 .map(|s| s.to_string_lossy().into_owned())
                 .collect(),
             cwd: process.cwd().map(|p| p.to_path_buf()),
+            zombie: process.status() == ProcessStatus::Zombie,
         };
         let entry = to_proc_entry(raw, uptime_secs, CLK_TZ);
         procs.insert(entry.stat.pid, entry);
