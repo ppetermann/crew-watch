@@ -4,6 +4,12 @@
 //! process's command name (basename of `argv[0]`, with a fallback through known
 //! interpreters like `node`). Adding a new runtime is one table row.
 //!
+//! A candidate whose path runs through a directory named exactly `fakebin`
+//! is never an agent: that is the stand-in tool directory test suites put on
+//! `PATH` (firstmate's `fm_fakebin` builds `<tmp>/fakebin/claude` as a symlink
+//! to `bash`), and a stub there would otherwise show up as a live worker row.
+//! See [`is_test_stub_path`].
+//!
 //! Aggregation attributes every process to its *nearest enclosing agent*:
 //! - each detected agent becomes one row (a "session"), and
 //! - a nested agent (an agent whose ancestor chain contains another agent) is
@@ -95,30 +101,52 @@ fn basename(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// Build candidate command basenames from argv. Includes `argv[0]`'s basename,
-/// and when `argv[0]` is an interpreter, the first following non-flag argument's
-/// basename too.
-pub fn extract_candidates(cmdline: &[String]) -> Vec<String> {
+/// Directory name test suites use for their stand-in tool binaries.
+const TEST_STUB_DIR: &str = "fakebin";
+
+/// True when `path` lies inside a test-stub tool directory: one of its parent
+/// directories is named exactly `fakebin`. The final component is the program
+/// itself and is not considered, so a program literally named `fakebin` is not
+/// excluded, and neither is a directory that merely contains the word (e.g.
+/// `fakebins`, `my-fakebin`). A bare name with no directory (`claude`, found
+/// through `PATH`) carries no evidence either way and is never a stub.
+pub fn is_test_stub_path(path: &str) -> bool {
+    Path::new(path)
+        .parent()
+        .is_some_and(|dir| dir.components().any(|c| c.as_os_str() == TEST_STUB_DIR))
+}
+
+/// The argv tokens that name the program: `argv[0]`, and when `argv[0]` is an
+/// interpreter, the first following non-flag argument too.
+fn candidate_paths(cmdline: &[String]) -> Vec<&str> {
     let mut out = Vec::new();
     let Some(a0) = cmdline.first() else {
         return out;
     };
-    let b = basename(a0);
-    out.push(b.clone());
-    if INTERPRETERS.contains(&b.as_str()) {
-        for tok in cmdline.iter().skip(1) {
-            if !tok.starts_with('-') {
-                out.push(basename(tok));
-                break;
-            }
+    out.push(a0.as_str());
+    if INTERPRETERS.contains(&basename(a0).as_str()) {
+        if let Some(tok) = cmdline.iter().skip(1).find(|t| !t.starts_with('-')) {
+            out.push(tok.as_str());
         }
     }
     out
 }
 
-/// Detect which agent runtime a command line belongs to.
+/// Build candidate command basenames from argv. Includes `argv[0]`'s basename,
+/// and when `argv[0]` is an interpreter, the first following non-flag argument's
+/// basename too.
+pub fn extract_candidates(cmdline: &[String]) -> Vec<String> {
+    candidate_paths(cmdline).into_iter().map(basename).collect()
+}
+
+/// Detect which agent runtime a command line belongs to. Candidates inside a
+/// test-stub directory ([`is_test_stub_path`]) are skipped.
 pub fn detect_kind(cmdline: &[String]) -> Option<&'static AgentKind> {
-    let cands = extract_candidates(cmdline);
+    let cands: Vec<String> = candidate_paths(cmdline)
+        .into_iter()
+        .filter(|p| !is_test_stub_path(p))
+        .map(basename)
+        .collect();
     for kind in AGENT_KINDS {
         for matcher in kind.matches {
             for cand in &cands {
@@ -406,6 +434,68 @@ mod tests {
         assert!(detect_kind(&["pip".to_string()]).is_none());
         assert!(detect_kind(&["ping".to_string()]).is_none());
         assert!(detect_kind(&["cargo".to_string()]).is_none());
+    }
+
+    fn argv(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn detect_skips_fakebin_stubs() {
+        // firstmate's supervision-host suite: `<tmp>/fakebin/fakebin/claude`
+        // is a symlink to bash, run by its full path with the cwd in a worktree.
+        let stub =
+            "/home/u/.cache/firstmate-tmp/t/tmp/fm-supervision-host.Ab12/fakebin/fakebin/claude";
+        assert!(detect_kind(&argv(&[stub, "-c", "true"])).is_none());
+        // Single-level fakebin and other runtimes.
+        assert!(detect_kind(&argv(&["/tmp/x/fakebin/codex", "exec"])).is_none());
+        assert!(detect_kind(&argv(&["/tmp/x/fakebin/pi-launcher"])).is_none());
+        // A stub script handed to a real interpreter.
+        assert!(detect_kind(&argv(&["node", "/tmp/x/fakebin/claude"])).is_none());
+    }
+
+    #[test]
+    fn detect_keeps_real_harnesses() {
+        for (cmd, id) in [
+            (&["claude", "--model", "opus"][..], "claude"),
+            (&["/home/u/.local/bin/claude"][..], "claude"),
+            (&["node", "/home/u/.npm-global/bin/pi"][..], "pi"),
+            (&["/home/u/.opencode/bin/opencode"][..], "opencode"),
+            // Look-alike directory names are not the stub directory.
+            (&["/opt/fakebins/claude"][..], "claude"),
+            (&["/opt/my-fakebin/claude"][..], "claude"),
+            // A program named fakebin-ish is judged by its own name only.
+            (&["/usr/bin/fakebin"][..], ""),
+        ] {
+            let got = detect_kind(&argv(cmd)).map(|k| k.id).unwrap_or("");
+            assert_eq!(got, id, "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn stub_path_rule_is_narrow() {
+        assert!(is_test_stub_path("/tmp/a/fakebin/claude"));
+        assert!(is_test_stub_path("fakebin/claude"));
+        assert!(!is_test_stub_path("claude"));
+        assert!(!is_test_stub_path("/usr/bin/fakebin"));
+        assert!(!is_test_stub_path("/tmp/fakebin2/claude"));
+        assert!(!is_test_stub_path(""));
+    }
+
+    #[test]
+    fn fakebin_stub_is_not_a_session_and_folds_into_its_real_ancestor() {
+        // A real claude(1) runs a test suite whose stub claude(2) has a child.
+        let stub = "/tmp/fm-supervision-host.X/fakebin/fakebin/claude";
+        let procs = vec![
+            (1, agent(1, 0, "claude", &["claude"])),
+            (2, agent(2, 1, "claude", &[stub, "-c", "sleep 9"])),
+            (3, proc_(3, 2, "sleep")),
+        ];
+        let sessions = build_sessions(&snap(procs, 2000), None);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].pid, 1);
+        // The stub and its child count toward the real agent's subtree.
+        assert_eq!(sessions[0].children, 2);
     }
 
     // --- aggregation ---

@@ -189,6 +189,12 @@ Prefixes rather than exact names, because some runtimes exec versioned or
 wrapper binaries. Short names like `pi` match exactly so they do not collide
 with lookalikes (`pip`, `ping`).
 
+Test stand-ins are not agents: a candidate whose path runs through a
+directory named exactly `fakebin` (the stub-tool directory test suites put on
+`PATH`, e.g. `/tmp/suite.X/fakebin/claude`) is skipped, so a suite running
+fake `claude`/`codex`/`pi` binaries does not add rows. Its processes count
+toward whichever real agent launched the suite.
+
 Adding a runtime is one row in `AGENT_KINDS` in
 [`src/detect.rs`](src/detect.rs) — see [docs/development.md](docs/development.md).
 
