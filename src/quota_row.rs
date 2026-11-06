@@ -28,6 +28,19 @@
 //! before alignment existed. Bars never shrink below 6 cells; reset is
 //! sacrificed before the bar becomes decoration. A single provider is never
 //! padded for a column no other row needs. See [`Tier`].
+//!
+//! ## Dollar figures and the detail line
+//!
+//! A provider with dollar figures or spend per model (crew-watch's own
+//! `openrouter` line) draws its limit as an ordinary `limit` window, so it
+//! joins the aligned block like any other, and follows the row with a plain
+//! suffix ([`headline_text`]: `left $74.50`, a balance, a note). The suffix
+//! takes no part in alignment and is dropped whole when it does not fit. Its
+//! second line ([`build_detail_line`]: the window's spend and the top models,
+//! or today/week/month) is outside the block too and is cut from the right on
+//! a narrow terminal, so the total and the most expensive models stay
+//! longest. A provider with figures but no window shows its headline (or,
+//! lacking one, its detail) on the first line.
 
 use crate::format_util::{format_reset, make_bar_min_one};
 use crate::quota::{
@@ -221,7 +234,144 @@ pub fn build_provider_line(p: &ProviderQuota, now_epoch: u64, width: usize) -> V
     if !has_usage_windows(p) {
         return dim_status_line(&p.id, &p.status, p.error.as_deref());
     }
-    build_row_independent(p, now_epoch, width)
+    if p.windows.is_empty() {
+        return figures_only_line(p, width);
+    }
+    with_headline(build_row_independent(p, now_epoch, width), p, width)
+}
+
+/// `$74.50`: dollars to the cent.
+pub fn format_usd(usd: f64) -> String {
+    format!("${:.2}", usd)
+}
+
+/// A model slug's last part (`openai/gpt-4.1` → `gpt-4.1`).
+fn short_model(slug: &str) -> &str {
+    slug.rsplit('/').next().unwrap_or(slug)
+}
+
+/// The text after a provider's bars: its limit left, its balance, and any
+/// note or failure of one part (`left $74.50  credits $12.40`). `None` for
+/// a provider without such figures (every quota-axi provider).
+pub fn headline_text(p: &ProviderQuota) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for f in &p.figures {
+        match f.id.as_str() {
+            "limit_left" => parts.push(format!("left {}", format_usd(f.usd))),
+            "credits_left" => parts.push(format!("credits {}", format_usd(f.usd))),
+            _ => {}
+        }
+    }
+    if parts.is_empty() && p.figures.is_empty() && p.usage.is_none() {
+        return None;
+    }
+    if let Some(n) = &p.note {
+        parts.push(n.clone());
+    }
+    if let Some(e) = &p.error {
+        parts.push(e.clone());
+    }
+    (!parts.is_empty()).then(|| parts.join("  "))
+}
+
+/// The second line's text: spend in the window and the top models with the
+/// rest (`1d $3.20  gpt-4.1 $2.10 · ... · rest $0.02`), or the calendar
+/// periods (`today $3.20 · week $11.40 · month $25.50`). `sep` joins the
+/// items. `None` for a provider with neither.
+pub fn detail_text(p: &ProviderQuota, sep: &str) -> Option<String> {
+    if let Some(u) = &p.usage {
+        let mut out = format!("{} {}", u.window, format_usd(u.total_usd));
+        if u.partial {
+            out.push_str(" (partial)");
+        }
+        let mut items: Vec<String> = u
+            .top
+            .iter()
+            .map(|m| format!("{} {}", short_model(&m.model), format_usd(m.usd)))
+            .collect();
+        if let Some(r) = &u.rest {
+            items.push(format!("rest {}", format_usd(r.usd)));
+        }
+        if !items.is_empty() {
+            out.push_str("  ");
+            out.push_str(&items.join(sep));
+        }
+        return Some(out);
+    }
+    let periods: Vec<String> = p
+        .figures
+        .iter()
+        .filter(|f| matches!(f.id.as_str(), "today" | "week" | "month"))
+        .map(|f| format!("{} {}", f.label, format_usd(f.usd)))
+        .collect();
+    (!periods.is_empty()).then(|| periods.join(sep))
+}
+
+/// The first line's text for a provider whose figures have no window, and
+/// whether its detail then still needs a line of its own.
+fn figures_only_text(p: &ProviderQuota, sep: &str) -> (String, bool) {
+    match headline_text(p) {
+        Some(h) if p.figures.iter().any(|f| f.id == "credits_left") || p.usage.is_some() => {
+            (h, detail_text(p, sep).is_some())
+        }
+        h => {
+            let d = detail_text(p, sep);
+            let text = match (d, h) {
+                (Some(d), Some(h)) => format!("{d}  {h}"),
+                (Some(d), None) => d,
+                (None, Some(h)) => h,
+                (None, None) => String::new(),
+            };
+            (text, false)
+        }
+    }
+}
+
+fn id_prefix(id: &str) -> String {
+    format!(" {:<6} ", id)
+}
+
+fn figures_only_line(p: &ProviderQuota, width: usize) -> Vec<RowSegment> {
+    let (text, _) = figures_only_text(p, " · ");
+    truncate_segments(
+        vec![RowSegment::plain(id_prefix(&p.id)), RowSegment::plain(text)],
+        width,
+    )
+}
+
+/// Append the headline to a row when it fits whole.
+fn with_headline(mut row: Vec<RowSegment>, p: &ProviderQuota, width: usize) -> Vec<RowSegment> {
+    if let Some(h) = headline_text(p) {
+        let seg = RowSegment::plain(format!("  {h}"));
+        if line_width(&row) + seg.text.chars().count() <= width {
+            row.push(seg);
+        }
+    }
+    row
+}
+
+/// The provider's second line, indented under its first line's bars and cut
+/// from the right to `width`, or `None` when it has none.
+pub fn build_detail_line(p: &ProviderQuota, width: usize) -> Option<Vec<RowSegment>> {
+    if !has_usage_windows(p) {
+        return None;
+    }
+    if p.windows.is_empty() && !figures_only_text(p, " · ").1 {
+        return None;
+    }
+    let text = detail_text(p, " · ")?;
+    let indent = " ".repeat(id_prefix(&p.id).chars().count());
+    Some(truncate_segments(
+        vec![RowSegment::plain(format!("{indent}{text}"))],
+        width,
+    ))
+}
+
+/// How many lines the provider takes in the quota block: 2 with a detail
+/// line, else 1.
+pub fn provider_line_count(p: &ProviderQuota) -> usize {
+    // The width only cuts the line, never removes it.
+    1 + usize::from(build_detail_line(p, usize::MAX).is_some())
 }
 
 /// Render the quota block: one row per provider, in input order, with bars
@@ -244,7 +394,7 @@ pub fn build_quota_rows(
 ) -> Vec<Vec<RowSegment>> {
     let live: Vec<&ProviderQuota> = providers
         .iter()
-        .filter(|p| has_usage_windows(p))
+        .filter(|p| !p.windows.is_empty())
         .copied()
         .collect();
     let aligned = if live.is_empty() {
@@ -258,9 +408,11 @@ pub fn build_quota_rows(
         .map(|p| {
             if !has_usage_windows(p) {
                 dim_status_line(&p.id, &p.status, p.error.as_deref())
+            } else if p.windows.is_empty() {
+                figures_only_line(p, width)
             } else {
                 let row = match &aligned {
-                    Some(block) => block[live_idx].clone(),
+                    Some(block) => with_headline(block[live_idx].clone(), p, width),
                     // Aligned block did not fit: drop alignment and let each row
                     // degrade through the single-row ladder on its own.
                     None => build_provider_line(p, now_epoch, width),
@@ -276,11 +428,48 @@ pub fn build_quota_rows(
 /// (bar-free): `claude   session 5% 1h45m  week 48% 3d22h  ...`. Windows are
 /// emitted in canonical order (session, week, extras). For a provider without
 /// windows: `{id}: {phrase}` (e.g. `copilot: sign-in required`). The caller
-/// prefixes `quota ` and any per-line decoration.
-pub fn once_line(p: &ProviderQuota, now_epoch: u64) -> String {
+/// prefixes `quota ` and any per-line decoration. Test-only: `--once` prints
+/// every line through [`once_lines`].
+#[cfg(test)]
+fn once_line(p: &ProviderQuota, now_epoch: u64) -> String {
+    once_lines(p, now_epoch).swap_remove(0)
+}
+
+/// Every `--once` line of a provider: [`once_line`]'s first line, plus the
+/// detail line of a provider with dollar figures
+/// (`openrouter  1d $3.20  gpt-4.1 $2.10, ..., rest $0.02`).
+pub fn once_lines(p: &ProviderQuota, now_epoch: u64) -> Vec<String> {
     if !has_usage_windows(p) {
-        return format!("{}: {}", p.id, status_phrase(&p.status, p.error.as_deref()));
+        return vec![format!(
+            "{}: {}",
+            p.id,
+            status_phrase(&p.status, p.error.as_deref())
+        )];
     }
+    let prefix = format!("{:<7}  ", p.id);
+    if p.windows.is_empty() {
+        let (text, detail_too) = figures_only_text(p, ", ");
+        let mut lines = vec![format!("{prefix}{text}")];
+        if detail_too {
+            if let Some(d) = detail_text(p, ", ") {
+                lines.push(format!("{prefix}{d}"));
+            }
+        }
+        return lines;
+    }
+    let mut first = once_windows(p, now_epoch);
+    if let Some(h) = headline_text(p) {
+        first.push_str("  ");
+        first.push_str(&h);
+    }
+    let mut lines = vec![first];
+    if let Some(d) = detail_text(p, ", ") {
+        lines.push(format!("{prefix}{d}"));
+    }
+    lines
+}
+
+fn once_windows(p: &ProviderQuota, now_epoch: u64) -> String {
     let mut out = format!("{:<7}  ", p.id);
     let mut first = true;
     for w in sorted_windows(&p.windows) {
@@ -691,6 +880,10 @@ mod tests {
             status: ProviderStatus::Fresh,
             stale: false,
             error: None,
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         }
     }
 
@@ -827,6 +1020,10 @@ mod tests {
             status: ProviderStatus::AuthRequired,
             stale: false,
             error: Some("GitHub Copilot sign-in required".to_string()),
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         };
         let line = render(&build_provider_line(&p, NOW, 80));
         assert_eq!(line, " copilot sign-in required");
@@ -842,6 +1039,10 @@ mod tests {
             status: ProviderStatus::Error,
             stale: false,
             error: Some("Codex quota unavailable".to_string()),
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         };
         let line = render(&build_provider_line(&p, NOW, 80));
         assert_eq!(line, " codex   unavailable");
@@ -868,6 +1069,10 @@ mod tests {
             status: ProviderStatus::AuthRequired,
             stale: false,
             error: Some("x".to_string()),
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         };
         assert_eq!(once_line(&p, NOW), "copilot: sign-in required");
     }
@@ -910,6 +1115,10 @@ mod tests {
             status: ProviderStatus::Fresh,
             stale: false,
             error: None,
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         };
         let line = render(&build_provider_line(&zai, NOW, 60));
         assert!(line.chars().count() <= 60, "fits: {line}");
@@ -956,6 +1165,10 @@ mod tests {
             status: ProviderStatus::Fresh,
             stale: false,
             error: None,
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         }
     }
 
@@ -1063,6 +1276,10 @@ mod tests {
             status: ProviderStatus::Fresh,
             stale: false,
             error: None,
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         }
     }
 
@@ -1159,6 +1376,10 @@ mod tests {
             status: ProviderStatus::Fresh,
             stale: false,
             error: None,
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         };
         let block = build_quota_rows(&[&extras_only], NOW, 120);
         assert_eq!(block.len(), 1);
@@ -1275,6 +1496,10 @@ mod tests {
             status: ProviderStatus::Fresh,
             stale: false,
             error: None,
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         };
         let lone = extras("novel", 10.0);
         let line = render(&build_provider_line(&lone, NOW, 120));
@@ -1303,6 +1528,10 @@ mod tests {
             status: ProviderStatus::AuthRequired,
             stale: false,
             error: Some("GitHub Copilot sign-in required".to_string()),
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         };
         let providers = vec![&copilot, &claude, &zai];
         let block = build_quota_rows(&providers, NOW, 140);
@@ -1311,5 +1540,237 @@ mod tests {
         let a = render(&block[1]);
         let b = render(&block[2]);
         assert_eq!(bar_starts(&a), bar_starts(&b), "live rows still aligned");
+    }
+
+    // --- dollar figures and the detail line (crew-watch's OpenRouter line) ---
+
+    use crate::quota::{ModelSpend, ModelUsage, QuotaFigure, RestSpend};
+
+    fn figure(id: &str, label: &str, usd: f64, cap: Option<f64>) -> QuotaFigure {
+        QuotaFigure {
+            id: id.to_string(),
+            label: label.to_string(),
+            usd,
+            cap_usd: cap,
+        }
+    }
+
+    fn or_base() -> ProviderQuota {
+        ProviderQuota {
+            id: "openrouter".to_string(),
+            label: "OpenRouter".to_string(),
+            plan: None,
+            windows: vec![],
+            status: ProviderStatus::Fresh,
+            stale: false,
+            error: None,
+            figures: vec![],
+            usage: None,
+            source: Some("My Key".to_string()),
+            note: None,
+        }
+    }
+
+    fn limit_window() -> QuotaWindow {
+        QuotaWindow {
+            id: "limit".to_string(),
+            label: "limit".to_string(),
+            percent_used: 25.5,
+            // 24 days after NOW.
+            resets_at: Some("2026-09-06T13:55:00Z".to_string()),
+        }
+    }
+
+    fn or_management() -> ProviderQuota {
+        let mut p = or_base();
+        p.windows = vec![limit_window()];
+        p.figures = vec![figure("limit_left", "left", 74.5, Some(100.0))];
+        p.usage = Some(ModelUsage {
+            window: "1d".to_string(),
+            total_usd: 3.2,
+            top: [
+                ("openai/gpt-4.1", 2.1),
+                ("google/gemini-3-flash-preview", 0.8),
+                ("anthropic/claude-sonnet-4", 0.21),
+                ("openai/gpt-4o", 0.07),
+            ]
+            .iter()
+            .map(|(m, u)| ModelSpend {
+                model: m.to_string(),
+                usd: *u,
+            })
+            .collect(),
+            rest: Some(RestSpend {
+                models: 3,
+                usd: 0.02,
+            }),
+            partial: false,
+        });
+        p
+    }
+
+    fn or_harness() -> ProviderQuota {
+        let mut p = or_base();
+        p.source = Some("pi".to_string());
+        p.windows = vec![limit_window()];
+        p.figures = vec![
+            figure("limit_left", "left", 74.5, Some(100.0)),
+            figure("today", "today", 3.2, None),
+            figure("week", "week", 11.4, None),
+            figure("month", "month", 25.5, None),
+        ];
+        p
+    }
+
+    const MGMT_DETAIL: &str = "1d $3.20  gpt-4.1 $2.10 · gemini-3-flash-preview $0.80 · claude-sonnet-4 $0.21 · gpt-4o $0.07 · rest $0.02";
+
+    #[test]
+    fn openrouter_management_line_wide() {
+        let p = or_management();
+        let row = render(&build_provider_line(&p, NOW, 200));
+        assert_eq!(
+            row,
+            " openrouter limit ███░░░░░░░░░  26% 24d0h  left $74.50"
+        );
+        let detail = render(&build_detail_line(&p, 200).unwrap());
+        assert_eq!(detail, format!("            {MGMT_DETAIL}"));
+        assert_eq!(provider_line_count(&p), 2);
+    }
+
+    #[test]
+    fn openrouter_detail_line_cuts_from_the_right() {
+        let p = or_management();
+        let detail = render(&build_detail_line(&p, 40).unwrap());
+        assert_eq!(detail.chars().count(), 40);
+        assert!(
+            detail.starts_with("            1d $3.20  gpt-4.1 $2.10"),
+            "{detail}"
+        );
+        // The headline is dropped whole before the row overflows.
+        for width in [20usize, 30, 40, 50, 60] {
+            let row = build_provider_line(&p, NOW, width);
+            let text = render(&row);
+            assert!(text.chars().count() <= width, "{width}: {text}");
+            assert!(
+                !text.contains("left $") || text.contains("left $74.50"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn openrouter_joins_the_aligned_block() {
+        let c = claude();
+        let p = or_management();
+        let block = build_quota_rows(&[&c, &p], NOW, 200);
+        let claude_row = render(&block[0]);
+        let or_row = render(&block[1]);
+        // The id column is widened to `openrouter` for both rows.
+        assert!(claude_row.starts_with(" claude     "), "{claude_row}");
+        assert!(or_row.starts_with(" openrouter "), "{or_row}");
+        assert!(or_row.ends_with("left $74.50"), "{or_row}");
+    }
+
+    #[test]
+    fn openrouter_once_lines() {
+        assert_eq!(
+            once_lines(&or_management(), NOW),
+            [
+                "openrouter  limit 26% 24d0h  left $74.50".to_string(),
+                format!("openrouter  {}", MGMT_DETAIL.replace(" · ", ", ")),
+            ]
+        );
+        assert_eq!(
+            once_lines(&or_harness(), NOW),
+            [
+                "openrouter  limit 26% 24d0h  left $74.50",
+                "openrouter  today $3.20, week $11.40, month $25.50",
+            ]
+        );
+    }
+
+    #[test]
+    fn openrouter_harness_two_lines_in_the_tui() {
+        let p = or_harness();
+        assert_eq!(
+            render(&build_detail_line(&p, 200).unwrap()),
+            "            today $3.20 · week $11.40 · month $25.50"
+        );
+        assert_eq!(provider_line_count(&p), 2);
+    }
+
+    #[test]
+    fn openrouter_periods_without_a_limit_take_one_line() {
+        let mut p = or_harness();
+        p.windows.clear();
+        p.figures.remove(0);
+        assert!(has_usage_windows(&p));
+        assert_eq!(
+            render(&build_provider_line(&p, NOW, 200)),
+            " openrouter today $3.20 · week $11.40 · month $25.50"
+        );
+        assert!(build_detail_line(&p, 200).is_none());
+        assert_eq!(provider_line_count(&p), 1);
+        assert_eq!(
+            once_lines(&p, NOW),
+            ["openrouter  today $3.20, week $11.40, month $25.50"]
+        );
+        // In a block, it renders the same and never shifts the live rows.
+        let c = claude();
+        let block = build_quota_rows(&[&c, &p], NOW, 200);
+        assert_eq!(
+            render(&block[1]),
+            " openrouter today $3.20 · week $11.40 · month $25.50"
+        );
+    }
+
+    #[test]
+    fn openrouter_credits_without_limit() {
+        let mut p = or_management();
+        p.windows.clear();
+        p.figures = vec![figure("credits_left", "credits", 12.4, None)];
+        assert_eq!(
+            render(&build_provider_line(&p, NOW, 200)),
+            " openrouter credits $12.40"
+        );
+        assert_eq!(
+            render(&build_detail_line(&p, 200).unwrap()),
+            format!("            {MGMT_DETAIL}")
+        );
+        assert_eq!(once_lines(&p, NOW)[0], "openrouter  credits $12.40");
+    }
+
+    #[test]
+    fn openrouter_failed_part_and_note_show_on_the_headline() {
+        let mut p = or_management();
+        p.usage = None;
+        p.error = Some("unavailable".to_string());
+        p.note = Some("key expires in 3d1h".to_string());
+        assert_eq!(
+            headline_text(&p).as_deref(),
+            Some("left $74.50  key expires in 3d1h  unavailable")
+        );
+        assert_eq!(provider_line_count(&p), 1);
+        // A partial answer says so.
+        let mut p = or_management();
+        p.usage.as_mut().unwrap().partial = true;
+        assert!(detail_text(&p, ", ")
+            .unwrap()
+            .starts_with("1d $3.20 (partial)  "));
+    }
+
+    #[test]
+    fn openrouter_sign_in_required_is_a_dim_status_line() {
+        let mut p = or_base();
+        p.status = ProviderStatus::AuthRequired;
+        p.error = Some("sign-in required".to_string());
+        assert!(!has_usage_windows(&p));
+        assert_eq!(
+            render(&build_provider_line(&p, NOW, 200)),
+            " openrouter sign-in required"
+        );
+        assert_eq!(once_lines(&p, NOW), ["openrouter: sign-in required"]);
+        assert_eq!(provider_line_count(&p), 1);
+        assert_eq!(headline_text(&claude()), None, "quota-axi rows unchanged");
     }
 }

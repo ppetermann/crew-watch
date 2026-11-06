@@ -23,7 +23,7 @@ use crate::detect::{AgentKind, AGENT_KINDS};
 use crate::format_util::{format_age_compact, format_kib, format_uptime, make_bar};
 use crate::procfs::{core_percents, CpuLine, Snapshot};
 use crate::quota::{has_usage_windows, ProviderQuota};
-use crate::quota_row::build_quota_rows;
+use crate::quota_row::{build_detail_line, build_quota_rows};
 use crate::taskinfo::fit_task_line;
 const MIN_CELL_WIDTH: usize = 18;
 const MAX_COLS: usize = 8;
@@ -430,6 +430,19 @@ fn draw_quota(f: &mut Frame, area: Rect, app: &App) {
                     .push(Span::styled(" stale", Style::default().fg(Color::DarkGray)));
             }
             lines.push(line);
+            if let Some(detail) = build_detail_line(p, area.width as usize) {
+                let style = if dim {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(
+                    detail
+                        .into_iter()
+                        .map(|seg| Span::styled(seg.text, style))
+                        .collect::<Vec<_>>(),
+                ));
+            }
         }
     }
 

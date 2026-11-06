@@ -9,15 +9,25 @@ cargo test                                   # unit tests
 cargo fmt --all                              # format
 cargo clippy --all-targets -- -D warnings    # lint
 
-# the library alone, without the `tui` feature (no ratatui, crossterm, clap)
+# the library alone, without the `tui` and `openrouter` features
+# (no ratatui, crossterm, clap, HTTP or TLS)
 cargo clippy --all-targets --no-default-features -- -D warnings
 cargo test --no-default-features
 ```
 
+The default features build ring (TLS for the OpenRouter client), which compiles
+C, so a C compiler must be reachable as `cc` or through `CC`. The OpenRouter
+tests run against a stand-in server on the loopback address and never reach
+OpenRouter; the harness key tests read sample files in a temporary home and
+never the real home or environment.
+
 CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs
 `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and
 `cargo test --all`, then the clippy and test steps again with
-`--no-default-features`, on every pull request and on pushes to `main`. Both
+`--no-default-features`, on every pull request and on pushes to `main`. The
+Linux job cross-checks the library alone for darwin; the macOS job checks the
+default features for both darwin targets, since ring's C code cannot be
+cross-compiled from Linux without a darwin toolchain. Both
 the format check and the lint are hard gates, so run them before pushing.
 
 ## Library and binary
@@ -78,12 +88,18 @@ If the runtime is normally launched through an interpreter (`node /opt/x/cli`),
 check that the interpreter is in `INTERPRETERS` in the same file, so the real
 program name is recovered from `argv[1]`.
 
+Then give it a row in `HARNESSES` in [`src/harness_key.rs`](../src/harness_key.rs)
+saying where it keeps an OpenRouter key (or that it cannot use OpenRouter); a
+test fails until it has one.
+
 ## Building on a host without a system C compiler
 
 Linking a Rust binary for a glibc target needs a C link chain. If the machine
 has no `cc`/`gcc` and you cannot install one, a small `cc` shim on `PATH` that
 drives the `lld` bundled with rustup and supplies the glibc PIE crt is enough to
-make `cargo build` work without root. On any host with `build-essential` (or the
+link, and `cargo build --no-default-features` works without root. The default
+features also compile C (ring), which a link-only shim cannot do: point `CC` at
+a real compiler (`CC=gcc cargo build`) if one exists elsewhere on the host. On any host with `build-essential` (or the
 equivalent) installed, plain `cargo build` works and no shim is needed; CI on
 `ubuntu-latest` has a compiler by default.
 

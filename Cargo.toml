@@ -21,10 +21,14 @@ path = "src/main.rs"
 required-features = ["tui"]
 
 [features]
-default = ["tui"]
+default = ["tui", "openrouter"]
 # The terminal UI and its CLI. Library users who only want the data layer
 # depend with `default-features = false` and never compile these.
-tui = ["dep:ratatui", "dep:crossterm", "dep:clap"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:clap", "openrouter"]
+# OpenRouter usage in the quota row: an HTTPS client (ureq with rustls and
+# ring, which needs a C compiler) and a TOML parser for harness config files.
+# Leave it out with `default-features = false` to compile no HTTP or TLS code.
+openrouter = ["dep:ureq", "dep:toml"]
 
 [dependencies]
 ratatui = { version = "0.29", optional = true }
@@ -32,6 +36,8 @@ crossterm = { version = "0.28", optional = true }
 clap = { version = "4.5", features = ["derive", "env"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ureq = { version = "3.5", default-features = false, features = ["rustls"], optional = true }
+toml = { version = "1.2", default-features = false, features = ["parse", "serde", "std"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
