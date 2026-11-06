@@ -237,6 +237,34 @@ impl Sampler {
     pub fn rows(&self) -> &[AgentRow] {
         &self.rows
     }
+
+    /// The runtime id of the agent session running in the firstmate home
+    /// itself (the session firstmate's own front end drives), or `None`. Of
+    /// several, the one running longest counts.
+    pub fn home_runtime(&self) -> Option<&'static str> {
+        home_session_runtime(&self.sessions, self.curr.as_ref()?, &self.fm_home)
+    }
+}
+
+/// The runtime of the longest-running session in `sessions` whose working
+/// directory is `dir` (compared as given and canonicalized, since `/proc`
+/// reports the resolved path).
+pub fn home_session_runtime(
+    sessions: &[Session],
+    snap: &Snapshot,
+    dir: &Path,
+) -> Option<&'static str> {
+    let canonical = std::fs::canonicalize(dir).ok();
+    sessions
+        .iter()
+        .filter(|s| {
+            snap.procs
+                .get(&s.pid)
+                .and_then(|e| e.cwd.as_deref())
+                .is_some_and(|cwd| cwd == dir || canonical.as_deref() == Some(cwd))
+        })
+        .max_by_key(|s| s.elapsed_secs)
+        .map(|s| s.kind.id)
 }
 
 impl SystemStats {
@@ -463,6 +491,55 @@ mod tests {
         let backlog = load_backlog_entries(home);
         let rows = resolve_sessions(home, &records, &titles, &backlog, snap, &mut sessions);
         (sessions, rows)
+    }
+
+    // --- the harness in the home ---
+
+    fn home_snapshot(sessions: &[(i32, &str, &str, u64)]) -> Snapshot {
+        let mut snap = Snapshot {
+            tick_hz: CLK_TZ,
+            uptime: Uptime { secs: 10_000.0 },
+            ..Snapshot::default()
+        };
+        for (pid, comm, cwd, started) in sessions {
+            snap.procs.insert(
+                *pid,
+                ProcEntry {
+                    stat: ProcStat {
+                        pid: *pid,
+                        ppid: 1,
+                        comm: comm.to_string(),
+                        starttime: started * CLK_TZ,
+                        ..ProcStat::default()
+                    },
+                    cmdline: vec![comm.to_string()],
+                    cwd: Some(PathBuf::from(cwd)),
+                },
+            );
+        }
+        snap
+    }
+
+    #[test]
+    fn home_runtime_is_the_longest_running_session_in_the_home() {
+        let home = Path::new("/home/crew/agents/firstmate");
+        // pi started at 100s (oldest), claude at 500s, both in the home;
+        // opencode elsewhere started earliest of all.
+        let snap = home_snapshot(&[
+            (10, "claude", "/home/crew/agents/firstmate", 500),
+            (11, "pi", "/home/crew/agents/firstmate", 100),
+            (12, "opencode", WORKTREE, 1),
+        ]);
+        let sessions = build_sessions(&snap, None);
+        assert_eq!(home_session_runtime(&sessions, &snap, home), Some("pi"));
+        // One session.
+        let snap = home_snapshot(&[(10, "claude", "/home/crew/agents/firstmate", 500)]);
+        let sessions = build_sessions(&snap, None);
+        assert_eq!(home_session_runtime(&sessions, &snap, home), Some("claude"));
+        // None in the home.
+        let snap = home_snapshot(&[(12, "opencode", WORKTREE, 1)]);
+        let sessions = build_sessions(&snap, None);
+        assert_eq!(home_session_runtime(&sessions, &snap, home), None);
     }
 
     // --- rows ---

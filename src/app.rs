@@ -2,12 +2,16 @@
 
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::cli::HarnessChoice;
 use crate::detect::Session;
 use crate::fleet::Sampler;
+use crate::openrouter::{OpenRouterKey, OpenRouterSource, UsageWindow};
 use crate::procfs::Snapshot;
 use crate::quota::{has_usage_windows, QuotaFetch, QuotaReport};
+use crate::quota_row::provider_line_count;
 
 pub struct App {
     pub interval: Duration,
@@ -34,6 +38,22 @@ pub struct App {
     /// About overlay; `true` while open. A view, not a mode: ticks and quota
     /// updates continue underneath while it is up.
     pub show_about: bool,
+    /// Where the OpenRouter line's key comes from (see [`App::openrouter_source`]).
+    pub openrouter: OpenRouterSettings,
+    /// The source the quota poller reads at each fetch; refreshed after every
+    /// tick so a change of the home's harness reaches the next fetch.
+    pub openrouter_source: Arc<Mutex<Option<OpenRouterSource>>>,
+}
+
+/// The OpenRouter settings from the environment and flags.
+#[derive(Debug, Clone, Default)]
+pub struct OpenRouterSettings {
+    /// A management key from `$CREW_WATCH_OPENROUTER_KEY`.
+    pub key: Option<OpenRouterKey>,
+    pub window: UsageWindow,
+    pub key_name: Option<String>,
+    /// `None`: the harness of the session in the firstmate home.
+    pub harness: Option<HarnessChoice>,
 }
 
 /// Last-known quota fetch state. On a [`QuotaFetch::Failed`] the previous report
@@ -67,12 +87,49 @@ impl App {
             notice: None,
             dialog: None,
             show_about: false,
+            openrouter: OpenRouterSettings::default(),
+            openrouter_source: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// The OpenRouter source for the next fetch: the management key when one
+    /// is set, else the named harness, else the harness of the session
+    /// running in the firstmate home, with that home as its project
+    /// directory. `None`: nothing is asked of OpenRouter.
+    pub fn openrouter_source(&self) -> Option<OpenRouterSource> {
+        let s = &self.openrouter;
+        if let Some(key) = &s.key {
+            return Some(OpenRouterSource::Management {
+                key: key.clone(),
+                window: s.window,
+                key_name: s.key_name.clone(),
+            });
+        }
+        let runtime = match s.harness {
+            Some(HarnessChoice::Off) => return None,
+            Some(HarnessChoice::Runtime(id)) => id,
+            None => self.sampler.home_runtime()?,
+        };
+        Some(OpenRouterSource::Harness {
+            runtime: runtime.to_string(),
+            project_dir: self.sampler.fm_home().to_path_buf(),
+        })
+    }
+
+    /// Publish [`App::openrouter_source`] to the poller.
+    pub fn sync_openrouter_source(&self) {
+        let next = self.openrouter_source();
+        if let Ok(mut cur) = self.openrouter_source.lock() {
+            if *cur != next {
+                *cur = next;
+            }
         }
     }
 
     /// Collect one /proc snapshot, rebuild sessions, and resolve task info.
     pub fn tick(&mut self) {
         self.sampler.refresh();
+        self.sync_openrouter_source();
     }
 
     pub fn snapshot(&self) -> Option<&Snapshot> {
@@ -119,7 +176,8 @@ impl App {
         }
     }
 
-    /// Number of quota lines to render this frame (the height of the quota slot).
+    /// Number of quota lines to render this frame (the height of the quota
+    /// slot): a provider with a detail line (OpenRouter) takes two.
     /// 0 when disabled, auto with no provider reporting windows, or an
     /// explicit-empty selection — in all those cases the slot vanishes and the
     /// layout is byte-identical to pre-quota crew-watch.
@@ -133,7 +191,12 @@ impl App {
                     return 0; // explicit empty ⇒ row hidden
                 }
                 match &self.quota.report {
-                    Some(r) => r.providers.iter().filter(|p| ids.contains(&p.id)).count(),
+                    Some(r) => r
+                        .providers
+                        .iter()
+                        .filter(|p| ids.contains(&p.id))
+                        .map(provider_line_count)
+                        .sum(),
                     None => 1, // fetch-level unavailable line (D9: explicit ⇒ visible failure)
                 }
             }
@@ -141,7 +204,13 @@ impl App {
                 .quota
                 .report
                 .as_ref()
-                .map(|r| r.providers.iter().filter(|p| has_usage_windows(p)).count())
+                .map(|r| {
+                    r.providers
+                        .iter()
+                        .filter(|p| has_usage_windows(p))
+                        .map(provider_line_count)
+                        .sum()
+                })
                 .unwrap_or(0),
         }
     }
@@ -184,6 +253,10 @@ mod tests {
                 status: ProviderStatus::Fresh,
                 stale: false,
                 error: None,
+                figures: Vec::new(),
+                usage: None,
+                source: None,
+                note: None,
             }
         } else {
             ProviderQuota {
@@ -194,6 +267,10 @@ mod tests {
                 status: ProviderStatus::Error,
                 stale: false,
                 error: Some("x".to_string()),
+                figures: Vec::new(),
+                usage: None,
+                source: None,
+                note: None,
             }
         };
         QuotaReport {
@@ -286,6 +363,35 @@ mod tests {
             "last report retained on failure"
         );
         assert_eq!(app.quota.last_error.as_deref(), Some("timed out"));
+    }
+
+    #[test]
+    fn openrouter_source_choice() {
+        let mut app = App::new(Duration::from_secs(2), PathBuf::from("/nonexistent-home"));
+        // Auto, no session in the home: no source.
+        assert_eq!(app.openrouter_source(), None);
+        app.openrouter.harness = Some(HarnessChoice::Runtime("pi"));
+        assert_eq!(
+            app.openrouter_source(),
+            Some(OpenRouterSource::Harness {
+                runtime: "pi".to_string(),
+                project_dir: PathBuf::from("/nonexistent-home"),
+            })
+        );
+        app.openrouter.harness = Some(HarnessChoice::Off);
+        assert_eq!(app.openrouter_source(), None);
+        // A management key wins over every harness setting.
+        app.openrouter.key = Some(OpenRouterKey::new("sk-or-v1-test").unwrap());
+        app.openrouter.window = UsageWindow::Hour;
+        assert!(matches!(
+            app.openrouter_source(),
+            Some(OpenRouterSource::Management {
+                window: UsageWindow::Hour,
+                ..
+            })
+        ));
+        app.sync_openrouter_source();
+        assert!(app.openrouter_source.lock().unwrap().is_some());
     }
 
     #[test]

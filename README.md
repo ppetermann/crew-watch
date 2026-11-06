@@ -36,9 +36,11 @@ cargo install crew-watch
 ```
 
 Every install path compiles locally, so you need a recent stable
-[Rust toolchain](https://rustup.rs) and — as for any native Rust binary on a
-glibc target — a working C link chain (`build-essential` on Debian/Ubuntu,
-`gcc` on Fedora; both distros ship it in the usual developer meta-packages).
+[Rust toolchain](https://rustup.rs) and a working C compiler and link chain
+(`build-essential` on Debian/Ubuntu, `gcc` on Fedora; both distros ship it in
+the usual developer meta-packages). The C compiler builds the TLS code of the
+OpenRouter client (the [`ring`](https://crates.io/crates/ring) crate); a
+library build without default features needs only the link chain.
 
 You can also install straight from the repository:
 
@@ -76,6 +78,10 @@ a failing fetch shows a single dim `quota: unavailable (quota-axi not found)`
 line instead of hiding, so an explicit choice never fails silently.) Use
 `--no-quota` to disable the row and the background fetch outright.
 
+The one provider crew-watch reads itself is
+[OpenRouter](https://openrouter.ai), over HTTPS, when a key is available (see
+[OpenRouter](#openrouter) below); it needs no quota-axi.
+
 ## Usage
 
 ```sh
@@ -85,6 +91,7 @@ crew-watch --once                # one-shot text dump, no TTY needed
 crew-watch --fm-home ~/agents/firstmate
 crew-watch --no-quota            # hide the quota row, skip the quota fetch
 crew-watch --quota-interval 120  # refresh quota every 120s (clamped 60..=3600)
+crew-watch --openrouter-window 1w  # OpenRouter spend per model over the last week
 ```
 
 | Flag | Meaning |
@@ -94,7 +101,14 @@ crew-watch --quota-interval 120  # refresh quota every 120s (clamped 60..=3600)
 | `--fm-home <dir>` | firstmate home to read task state from. Also settable via `CREW_WATCH_FM_HOME`; defaults to `~/agents/firstmate`. |
 | `--no-quota` | Disable the quota row and its background fetch entirely. |
 | `--quota-interval <secs>` | Seconds between quota refreshes. Default `600`, clamped to `60..=3600`. |
+| `--openrouter-window <1h\|1d\|1w>` | With an OpenRouter management key: the window of the spend per model, ending now. Default `1d`. Also `CREW_WATCH_OPENROUTER_WINDOW`. |
+| `--openrouter-key-name <name>` | With an OpenRouter management key: the name of the key the line is about. Default: the account's only enabled key, else all keys. Also `CREW_WATCH_OPENROUTER_KEY_NAME`. |
+| `--openrouter-harness <id\|none>` | Without a management key: the harness whose own OpenRouter key the line reads (`claude`, `opencode`, `codex`, `grok`, `kimi`, `muse`, `pi`), or `none` to turn that off. Default: the harness of the session running in the firstmate home. Also `CREW_WATCH_OPENROUTER_HARNESS`. |
 | `--help` / `--version` | The usual. |
+
+An OpenRouter management key is read only from the `CREW_WATCH_OPENROUTER_KEY`
+environment variable, never from a flag, since arguments are visible in the
+process list. A value that is not shaped like a key is refused at start.
 
 Key bindings inside the TUI:
 
@@ -311,6 +325,69 @@ In `--once` the same data prints bar-free, one line per provider:
 quota claude   session 34% 2h24m  week 61% 3d7h  fable 22% 3d7h
 ```
 
+### OpenRouter
+
+crew-watch reads OpenRouter itself (no quota-axi involved) and shows it as an
+`openrouter` provider, which replaces quota-axi's provider of the same id. The
+key decides what the line shows:
+
+| Key | What the line shows |
+|-----|---------------------|
+| A management key in `CREW_WATCH_OPENROUTER_KEY` | The key's credit limit left (or the account's credits left when the key has no limit, or when the balance is lower), and the spend over the last hour, day or week (`--openrouter-window`): the four most expensive models and the rest combined |
+| Otherwise, the OpenRouter key of the harness in use | That key's limit (or the budget that blocks it first) and its spend in the current UTC day, week and month |
+| Neither | No OpenRouter line; nothing is sent to OpenRouter |
+
+```text
+ openrouter limit ███░░░░░░░░░  26% 24d0h  left $74.50
+            1d $3.20  gpt-4.1 $2.10 · gemini-3-flash-preview $0.80 · claude-sonnet-4 $0.21 · gpt-4o $0.07 · rest $0.02
+```
+
+With a harness's key the second line reads `today $3.20 · week $11.40 · month
+$25.50`. A terminal too narrow for the second line cuts it from the right, so
+the total and the most expensive models stay longest. `--once` prints both
+lines, and when the harness has no usable key, one line saying why:
+
+```text
+quota openrouter  limit 26% 24d0h  left $74.50
+quota openrouter  1d $3.20  gpt-4.1 $2.10, gemini-3-flash-preview $0.80, claude-sonnet-4 $0.21, gpt-4o $0.07, rest $0.02
+quota openrouter: pi has no OpenRouter key
+```
+
+A refused key (expired, revoked, mistyped) shows `sign-in required`; a regular
+key in `CREW_WATCH_OPENROUTER_KEY` shows `needs a management key`. A management
+key that expires within a week adds a `key expires in …` note.
+
+**The harness in use** is the harness of the agent session whose working
+directory is the firstmate home (`--fm-home`); of several, the one running
+longest. `--openrouter-harness` names one instead. crew-watch reads its key
+fresh at each fetch, from the harness's own files or environment, in the
+harness's own order:
+
+| Harness | Where the key is read |
+|---------|----------------------|
+| Claude Code | `ANTHROPIC_AUTH_TOKEN` (then `ANTHROPIC_API_KEY`), only when `ANTHROPIC_BASE_URL` is OpenRouter's. Each from the `env` block of the project's `.claude/settings.local.json`, `.claude/settings.json`, then `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR`), else the environment |
+| OpenCode | `provider.openrouter.options.apiKey` in `$OPENCODE_CONFIG_CONTENT`, then in `opencode.json`/`opencode.jsonc` (the project's, `$OPENCODE_CONFIG`, then `~/.config/opencode/`); then the `openrouter` entry of `~/.local/share/opencode/auth.json` (or `$OPENCODE_AUTH_CONTENT`); then `OPENROUTER_API_KEY` |
+| pi | The `openrouter` entry of `~/.pi/agent/auth.json` (an API key, or the key from "Sign in with OpenRouter"); then `providers.openrouter.apiKey` in `models.json` beside it; then `OPENROUTER_API_KEY`. `$PI_CODING_AGENT_DIR` moves the directory |
+| Codex | In `~/.codex/config.toml` (`$CODEX_HOME`), the provider `model_provider` names, when its `base_url` is OpenRouter's: `experimental_bearer_token`, else the variable `env_key` names |
+| Grok Build | In `~/.grok/config.toml` (`$GROK_HOME`), the `[model."<name>"]` that `[models] default` names, when its `base_url` is OpenRouter's: the variable `env_key` names |
+| Kimi Code | In `~/.kimi-code/config.toml` (`$KIMI_CODE_HOME`), the provider of `default_model`, when its `base_url` is OpenRouter's: `api_key`, else the variable `api_key_env` names, else `OPENAI_API_KEY` in its `env` table |
+| Muse Code | Cannot use OpenRouter |
+
+The rules: a key is used only where its harness would send it to OpenRouter
+(its base URL must be `https` on `openrouter.ai` or a subdomain; a provider
+pointed at a proxy gives no key). A key that comes from a command (pi's
+`!command`, Claude Code's `apiKeyHelper`, Codex's `auth`) is never run, so
+there is no line. Environment references are followed only as a whole value
+(`$NAME`, `${NAME}`, `{env:NAME}`). In the TUI, environment variables are
+crew-watch's own, which can differ from the session's; keys kept in the
+harness's files are found either way.
+
+Requests go over HTTPS to `openrouter.ai` only, with redirects and proxies off,
+on the quota thread at the quota cadence: one request per fetch with a
+harness's key, four with a management key (one more per hundred keys the
+account has). Keys are never printed, logged or
+passed to another program.
+
 ## Use as a library
 
 Since 0.4.0 the crate is also a library, `crew_watch`, with the data behind the
@@ -322,6 +399,13 @@ so the terminal UI and its dependencies are not compiled:
 [dependencies]
 crew-watch = { version = "0.5", default-features = false }
 ```
+
+The OpenRouter reader and the harness key lookup sit behind the `openrouter`
+feature (on by default, and implied by `tui`): add `features = ["openrouter"]`
+to get `crew_watch::openrouter::fetch_quota`, which runs `quota-axi` and the
+OpenRouter reader side by side and returns one report, plus the account's key
+names and the lookup's outcome for a settings page. Without it the library
+compiles no HTTP or TLS code.
 
 Point a `crew_watch::fleet::Sampler` at a firstmate home (any home: the library
 has no default path) and call `sample()` on an interval for a serializable
@@ -353,7 +437,8 @@ been cleaned up.
   Command Line Tools, which provide the linker.
 - Nothing else. There is no daemon, no config to write before first run, and no
   network access on the monitoring path — the system is sampled exactly once
-  per refresh.
+  per refresh. The only request crew-watch makes itself is the OpenRouter one,
+  on the quota thread, when a key is available.
 
 ## Documentation
 

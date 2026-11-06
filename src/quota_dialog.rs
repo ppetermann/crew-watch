@@ -165,6 +165,10 @@ mod tests {
             status: ProviderStatus::Fresh,
             stale: false,
             error: None,
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         }
     }
 
@@ -177,6 +181,10 @@ mod tests {
             status,
             stale: false,
             error: Some("e".to_string()),
+            figures: Vec::new(),
+            usage: None,
+            source: None,
+            note: None,
         }
     }
 

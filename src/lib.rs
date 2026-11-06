@@ -32,10 +32,14 @@ pub mod detect;
 pub mod fleet;
 pub mod format_util;
 pub mod gate;
+#[cfg(feature = "openrouter")]
+pub mod harness_key;
 pub mod ledger;
 mod macos;
 pub mod meta;
 pub mod model;
+#[cfg(feature = "openrouter")]
+pub mod openrouter;
 pub mod procfs;
 pub mod project;
 pub mod prpoll;

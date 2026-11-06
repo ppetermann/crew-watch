@@ -57,6 +57,58 @@ pub struct ProviderQuota {
     /// of our fetch age.
     pub stale: bool,
     pub error: Option<String>,
+    /// Dollar amounts (OpenRouter: `limit left`, `credits left`, `today`,
+    /// `week`, `month`). Empty for quota-axi's providers.
+    pub figures: Vec<QuotaFigure>,
+    /// Spend per model over a rolling window (OpenRouter with a management
+    /// key). `None` for quota-axi's providers.
+    pub usage: Option<ModelUsage>,
+    /// Whose key the line is about: a key name or `all keys` for a
+    /// management key, the harness id for a harness's key.
+    pub source: Option<String>,
+    /// A short note for the line (e.g. `key expires in 3d`).
+    pub note: Option<String>,
+}
+
+/// One dollar amount on a provider's line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuotaFigure {
+    /// `limit_left`, `credits_left`, `today`, `week` or `month`.
+    pub id: String,
+    pub label: String,
+    pub usd: f64,
+    /// The cap the amount is measured against, where there is one.
+    pub cap_usd: Option<f64>,
+}
+
+/// Spend per model over a rolling window: the four most expensive models and
+/// the rest combined.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelUsage {
+    /// `1h`, `1d` or `1w`.
+    pub window: String,
+    pub total_usd: f64,
+    /// At most four, most expensive first.
+    pub top: Vec<ModelSpend>,
+    /// Every other model with spend, combined; `None` with four or fewer.
+    pub rest: Option<RestSpend>,
+    /// The answer hit OpenRouter's row cap: the figures are a lower bound.
+    pub partial: bool,
+}
+
+/// One model's spend in the window. `model` is OpenRouter's slug
+/// (`openai/gpt-4.1`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelSpend {
+    pub model: String,
+    pub usd: f64,
+}
+
+/// The models beyond the top four, combined.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RestSpend {
+    pub models: usize,
+    pub usd: f64,
 }
 
 /// A single usage window (e.g. `five_hour` / "session", `model:fable`).
@@ -205,14 +257,18 @@ pub fn parse_report(input: &str) -> Result<QuotaReport, String> {
                         .unwrap_or(ProviderStatus::Unknown("missing".to_string())),
                     stale: p.state.stale,
                     error: p.state.error,
+                    figures: Vec::new(),
+                    usage: None,
+                    source: None,
+                    note: None,
                 }
             })
             .collect(),
     })
 }
 
-/// True iff this provider carries at least one usage window to render bars for.
-/// The single definition shared by the auto-selection seed (D7), the row, its
+/// True iff this provider has something to show: a usage window to render a
+/// bar for, a dollar figure, or spend per model. The single definition shared by the auto-selection seed (D7), the row, its
 /// colouring, and `--once`, so they can never disagree.
 ///
 /// Deliberately independent of [`ProviderStatus`]: quota-axi reports
@@ -221,7 +277,7 @@ pub fn parse_report(input: &str) -> Result<QuotaReport, String> {
 /// / a `stale` suffix), never a visibility filter — hiding on it would blank the
 /// row exactly when the last known reading matters most.
 pub fn has_usage_windows(p: &ProviderQuota) -> bool {
-    !p.windows.is_empty()
+    !p.windows.is_empty() || !p.figures.is_empty() || p.usage.is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +367,7 @@ pub fn parse_iso8601_utc_epoch(input: &str) -> Option<u64> {
 /// Howard Hinnant's `days_from_civil`: days since 1970-01-01 for a proleptic
 /// Gregorian date. Returns `None` for an out-of-range month/day so callers can't
 /// feed it garbage.
-fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
+pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
     if !(1..=12).contains(&month) || day < 1 {
         return None;
     }

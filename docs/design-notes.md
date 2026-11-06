@@ -30,6 +30,8 @@ I/O is a single `/proc` pass plus a handful of small best-effort file reads.
 | `src/model.rs` | `--model` extraction from argv |
 | `src/project.rs` | git-repository project name from a working directory |
 | `src/quota.rs` | quota report parsing and the background poller |
+| `src/openrouter.rs` | the OpenRouter reader (`openrouter` feature): HTTPS client, the management key's four requests and the harness key's one, bucket sums, and the merged quota fetch |
+| `src/harness_key.rs` | where each detected harness keeps its OpenRouter key, read-only (`openrouter` feature) |
 | `src/quota_row.rs` | the pure quota-row builder |
 | `src/quota_dialog.rs` | provider-selection dialog as a state machine over key codes |
 | `src/about.rs` | about overlay: key semantics, wrapped content and centered geometry |
@@ -69,6 +71,41 @@ a 10s kill-timeout and hands results over a channel that the main loop drains
 without blocking. Every failure leg reduces to "no fresh quota data", never to a
 stalled or dead monitor.
 
+The OpenRouter reader runs on the same thread, side by side with quota-axi and
+under the same 10s bound: a management key costs four requests per fetch, a
+harness's key one, no key none.
+
+## OpenRouter
+
+**HTTP client.** ureq with rustls and ring, behind the `openrouter` feature, so
+a library user who builds without default features compiles no HTTP or TLS
+code. ring's C code is why the default-feature darwin checks run on the macOS
+CI job rather than as a cross-check from Linux. The agent is built for one
+purpose: `https` only, one fixed host, redirects off, proxies from the
+environment off, a size cap on every body, and status codes treated as data.
+
+**Spend per model is summed here.** `POST /analytics/query` is asked for minute
+buckets (`1h`) or hour buckets (`1d`, `1w`) over the window ending at the
+fetch, and crew-watch adds the buckets up per model. A single total per model
+would be a smaller answer, but bucketed data is the documented path to data
+finer than a day; how a bucket-less total treats a range starting mid-day is
+not documented. A range starting mid-bucket may count that bucket whole, so the
+far edge is off by at most one bucket. A truncated answer is marked partial.
+
+**The harness key lookup** (`src/harness_key.rs`) has one row per runtime of the
+detection table, enforced by a test, so adding a runtime forces the question of
+where its key lives. Its rules are in the module header: a key is used only
+where its harness would send it to OpenRouter (the base-URL rule), commands are
+never run, environment references are followed only as a whole value, and
+files are read fresh and capped. The key reaches only the reader, inside the
+redacting `OpenRouterKey`; callers get a `LookupOutcome` naming the harness and
+the kind of source.
+
+**Which harness.** In the TUI, the harness of the session whose working
+directory is the firstmate home (the longest-running of several), recomputed
+after every tick and read by the poller at each fetch. A library caller passes
+the runtime id itself.
+
 ## Robustness rules
 
 - A `/proc` entry that vanishes mid-read is skipped. Processes disappearing
@@ -76,6 +113,12 @@ stalled or dead monitor.
 - Every firstmate file is optional. Missing, unreadable or malformed input
   degrades exactly one signal (a title, a state glyph) and never fails a
   refresh.
+- OpenRouter answers are read the same way: numbers may arrive as numeric
+  strings, `null` is "none", and each part of a fetch fails alone (a refused
+  analytics query still leaves the limit). A failure becomes a fixed phrase
+  (`sign-in required`, `needs a management key`, `unavailable`); no response
+  body or transport error text is relayed, so nothing an answer echoes back can
+  reach the screen.
 - The quota payload is parsed schema-tolerantly: unknown fields are ignored,
   optional ones default, and an unrecognised schema version is not fatal. An
   additive upstream change keeps working; a genuinely broken payload reports the

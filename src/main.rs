@@ -11,7 +11,9 @@ mod ui;
 
 // The data layer is the `crew_watch` library; importing its modules at the
 // crate root keeps every `crate::<module>` path in the TUI modules valid.
-use crew_watch::{activity, config, detect, fleet, format_util, procfs, quota, taskinfo};
+use crew_watch::{
+    activity, config, detect, fleet, format_util, harness_key, openrouter, procfs, quota, taskinfo,
+};
 
 use std::io;
 use std::path::PathBuf;
@@ -31,7 +33,9 @@ use ratatui::Terminal;
 use crate::agent_cols::{fit_cpu, fit_elapsed, fit_mem, fit_pid};
 use crate::app::App;
 use crate::cli::Cli;
-use crate::quota::{spawn_poller, QuotaFetch};
+use crate::harness_key::{HarnessEnv, LookupOutcome, LookupStatus};
+use crate::openrouter::{OpenRouterKey, KEY_ENV};
+use crate::quota::QuotaFetch;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -54,16 +58,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // No config path (no $HOME) ⇒ auto mode, session-only; a notice surfaces if
     // the user later tries to persist a selection from the dialog.
 
+    // OpenRouter: a management key only ever from the environment (an
+    // argument would show in the process list). A malformed one is refused
+    // at start, without echoing it.
+    app.openrouter.key = match OpenRouterKey::from_env() {
+        Some(Ok(k)) => Some(k),
+        Some(Err(e)) => {
+            eprintln!("crew-watch: ${KEY_ENV}: {e}");
+            std::process::exit(2);
+        }
+        None => None,
+    };
+    app.openrouter.window = cli.openrouter_window;
+    app.openrouter.key_name = cli.openrouter_key_name.filter(|n| !n.trim().is_empty());
+    app.openrouter.harness = cli.openrouter_harness;
+
     if cli.once {
         run_once(&mut app);
         return Ok(());
-    }
-
-    // Spawn the background poller (never on the /proc tick path).
-    if app.quota_enabled {
-        let (tx, rx) = channel::<QuotaFetch>();
-        app.quota_rx = Some(rx);
-        spawn_poller(app.quota_interval, tx);
     }
 
     enable_raw_mode()?;
@@ -80,7 +92,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         original_hook(info);
     }));
 
+    // The first tick finds the session in the home, so the first quota
+    // fetch already knows its harness.
     app.tick();
+    // Spawn the background poller (never on the /proc tick path).
+    if app.quota_enabled {
+        let (tx, rx) = channel::<QuotaFetch>();
+        app.quota_rx = Some(rx);
+        openrouter::spawn_poller(
+            app.quota_interval,
+            tx,
+            std::sync::Arc::clone(&app.openrouter_source),
+            HarnessEnv::from_process(),
+        );
+    }
     let result = run(&mut terminal, &mut app);
 
     disable_raw_mode()?;
@@ -93,26 +118,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// `--once`: two samples ~1s apart (so CPU% is real), with the quota fetch
 /// running concurrently on a thread so its ~0.8s wall overlaps the sampling
 /// sleep. Then print and exit.
+///
+/// The first sample is taken before the quota fetch starts, so the OpenRouter
+/// lookup knows the harness of the session in the firstmate home.
 fn run_once(app: &mut App) {
+    app.tick();
     let quota_handle = if app.quota_enabled {
-        Some(std::thread::spawn(|| {
-            crate::quota::fetch_once(Duration::from_secs(10))
+        let source = app.openrouter_source();
+        Some(std::thread::spawn(move || {
+            openrouter::fetch_quota(
+                source.as_ref(),
+                &HarnessEnv::from_process(),
+                Duration::from_secs(10),
+            )
         }))
     } else {
         None
     };
-    app.tick();
     std::thread::sleep(Duration::from_millis(1000));
     app.tick();
+    let mut lookup = None;
     if let Some(h) = quota_handle {
         if let Ok(fetch) = h.join() {
-            match fetch {
+            match fetch.quota {
                 QuotaFetch::Report(r) => app.quota.report = Some(r),
                 QuotaFetch::Failed(e) => app.quota.last_error = Some(e),
             }
+            lookup = fetch.lookup;
         }
     }
-    print_once(app);
+    print_once(app, lookup.as_ref());
 }
 
 /// Render + input/tick loop. Polls with a timeout of the remaining time until
@@ -324,7 +359,7 @@ fn once_agent_row(
 }
 
 /// Non-interactive text dump of one snapshot (the `--once` path).
-fn print_once(app: &App) {
+fn print_once(app: &App, lookup: Option<&LookupOutcome>) {
     use crate::format_util::{format_kib, format_uptime};
     use crate::procfs::CpuLine;
     use crate::taskinfo::{compose_task_line, fit_task_line};
@@ -401,6 +436,15 @@ fn print_once(app: &App) {
     }
 
     print_once_quota(app);
+    if let Some(line) = lookup.and_then(once_lookup_line) {
+        println!("{line}");
+    }
+}
+
+/// `--once`'s line naming why the harness's key gave no OpenRouter line, or
+/// `None` when a key was found.
+fn once_lookup_line(o: &LookupOutcome) -> Option<String> {
+    (!matches!(o.status, LookupStatus::Found(_))).then(|| format!("quota openrouter: {o}"))
 }
 
 /// Print the quota lines for `--once`, after the agents table. Bar-free, one
@@ -421,8 +465,7 @@ fn print_once_quota(app: &App) {
             if let Some(r) = &app.quota.report {
                 for p in &r.providers {
                     if crate::quota::has_usage_windows(p) {
-                        let suffix = if p.stale { " (stale)" } else { "" };
-                        println!("quota {}{}", crate::quota_row::once_line(p, now), suffix);
+                        print_once_provider(p, now);
                     }
                 }
             }
@@ -435,8 +478,7 @@ fn print_once_quota(app: &App) {
                 Some(r) => {
                     for p in &r.providers {
                         if ids.contains(&p.id) {
-                            let suffix = if p.stale { " (stale)" } else { "" };
-                            println!("quota {}{}", crate::quota_row::once_line(p, now), suffix);
+                            print_once_provider(p, now);
                         }
                     }
                 }
@@ -449,9 +491,35 @@ fn print_once_quota(app: &App) {
     }
 }
 
+/// One provider's `--once` lines, each prefixed `quota `; a stale provider's
+/// first line carries the `(stale)` suffix.
+fn print_once_provider(p: &crate::quota::ProviderQuota, now: u64) {
+    for (i, line) in crate::quota_row::once_lines(p, now).iter().enumerate() {
+        let suffix = if i == 0 && p.stale { " (stale)" } else { "" };
+        println!("quota {line}{suffix}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn once_lookup_line_only_when_no_key() {
+        let o = LookupOutcome {
+            harness: "pi".to_string(),
+            status: LookupStatus::NoKey,
+        };
+        assert_eq!(
+            once_lookup_line(&o).as_deref(),
+            Some("quota openrouter: pi has no OpenRouter key")
+        );
+        let found = LookupOutcome {
+            harness: "pi".to_string(),
+            status: LookupStatus::Found(crate::harness_key::SourceKind::Environment),
+        };
+        assert_eq!(once_lookup_line(&found), None);
+    }
 
     #[test]
     fn quota_interval_default_and_in_range_values_pass_through() {
