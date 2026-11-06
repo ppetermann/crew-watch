@@ -676,6 +676,27 @@ mod tests {
     }
 
     #[test]
+    fn report_mtime_refuses_ids_that_leave_the_data_dir() {
+        let home = tempfile_dir("report-guard");
+        // Every refused id names a report that exists, so only the guard
+        // keeps it from being read.
+        for dir in [
+            home.join("data"),
+            home.join("x"),
+            home.join("data").join("a").join("b"),
+            home.join("data").join(".hidden"),
+            home.join("data").join("ok"),
+        ] {
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("report.md"), "# r\n").unwrap();
+        }
+        for id in ["", "../x", "a/b", ".hidden"] {
+            assert_eq!(report_mtime(&home, id), None, "{id:?}");
+        }
+        assert!(report_mtime(&home, "ok").is_some());
+    }
+
+    #[test]
     fn non_fleet_rows_have_no_fleet_fields() {
         let home = tempfile_dir("non-fleet");
         let snap = agent_snapshot("/home/crew/scratch", &["claude"]);

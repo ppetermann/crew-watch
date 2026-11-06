@@ -117,7 +117,10 @@ impl LedgerTail {
             return Vec::new();
         }
         let mut fresh = Vec::new();
-        let Ok(read) = file.take(len - self.offset).read_to_end(&mut fresh) else {
+        let Ok(read) = file
+            .take(len.saturating_sub(self.offset))
+            .read_to_end(&mut fresh)
+        else {
             return Vec::new();
         };
         self.offset += read as u64;

@@ -24,7 +24,7 @@ never the real home or environment.
 CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs
 `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and
 `cargo test --all`, then the clippy and test steps again with
-`--no-default-features`, on every pull request and on pushes to `main`. The
+`--no-default-features`, on every non-draft pull request (drafts run nothing). The
 Linux job cross-checks the library alone for darwin; the macOS job checks the
 default features for both darwin targets, since ring's C code cannot be
 cross-compiled from Linux without a darwin toolchain. Both

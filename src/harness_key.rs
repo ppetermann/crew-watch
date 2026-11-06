@@ -67,7 +67,9 @@ impl fmt::Debug for HarnessEnv {
 }
 
 impl HarnessEnv {
-    /// This process's `$HOME` and environment; see [`Self::from_os_env`].
+    /// This process's `$HOME` and environment. An empty `$HOME` counts as
+    /// unset, and a variable whose name or value is not valid Unicode is left
+    /// out (as if unset) instead of panicking.
     pub fn from_process() -> Self {
         Self::from_os_env(std::env::var_os("HOME"), std::env::vars_os())
     }

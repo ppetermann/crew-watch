@@ -7,7 +7,9 @@
 //! 1. **`data/backlog.md`** — one markdown checkbox per task id:
 //!    `- [ ] <task-id> - <title> (repo: ...) (kind: ...) (since ...)`.
 //!    The title is the text between ` - <task-id> - ` and the first trailing
-//!    marker (`(repo:`, `(kind:`, `(since`, `(done`, `blocked-by:`).
+//!    marker (`(repo:`, `(kind:`, `(priority:`, `(hold:`, `(hold-kind:`,
+//!    `(hold-until:`, `(since`, `(merged`, `(reported`, `(done`, `blocked-by:`),
+//!    the marker set of firstmate's own title cleaner.
 //! 2. **`data/<task-id>/brief.md`** — fallback: the first sentence of the first
 //!    paragraph under the `# Task` heading.
 //!
@@ -216,12 +218,28 @@ fn marker(line: &str, name: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-/// Strip the trailing firstmate metadata markers from a backlog title:
-/// ` (repo: ...)`, ` (kind: ...)`, ` (since ...)`, ` (done ...)`, and
-/// ` blocked-by: ...`. The title itself may contain parenthesized text, so we
-/// only cut at the first marker keyword, not at every `(`.
+/// Strip the trailing firstmate metadata markers from a backlog title: every
+/// marker firstmate's own title cleaner (`bin/fm-fleet-snapshot.sh`,
+/// `strip_trailing_metadata`) drops — ` (repo: ...)`, ` (kind: ...)`,
+/// ` (priority: ...)`, ` (hold: ...)`, ` (hold-kind: ...)`,
+/// ` (hold-until: ...)`, ` (since ...)`, ` (merged ...)`, ` (reported ...)`,
+/// ` (done ...)` — and ` blocked-by: ...`. The title itself may contain
+/// parenthesized text, so we only cut at the first marker keyword, not at
+/// every `(`.
 fn strip_trailing_markers(title: &str) -> String {
-    const MARKERS: &[&str] = &[" (repo:", " (kind:", " (since", " (done", " blocked-by:"];
+    const MARKERS: &[&str] = &[
+        " (repo:",
+        " (kind:",
+        " (priority:",
+        " (hold:",
+        " (hold-kind:",
+        " (hold-until:",
+        " (since",
+        " (merged",
+        " (reported",
+        " (done",
+        " blocked-by:",
+    ];
     let mut cut = title.len();
     for &m in MARKERS {
         if let Some(idx) = title.find(m) {
@@ -503,6 +521,24 @@ mod tests {
             "- [ ] blocked-task - needs a thing blocked-by: other-task (repo: x) (kind: y)";
         let pairs = parse_backlog(content);
         assert_eq!(pairs[0].1, "needs a thing");
+    }
+
+    #[test]
+    fn parse_backlog_strips_the_owners_full_marker_set() {
+        // A line whose first marker is any of firstmate's strip set keeps
+        // none of the marker text in its title.
+        for marker in [
+            "(priority: high)",
+            "(hold: waiting on captain)",
+            "(hold-kind: captain)",
+            "(hold-until: 2026-12-01)",
+            "(merged 2026-11-01)",
+            "(reported 2026-11-01)",
+        ] {
+            let line = format!("- [ ] t - A call {marker} (repo: x)");
+            let pairs = parse_backlog(&line);
+            assert_eq!(pairs[0].1, "A call", "{marker}");
+        }
     }
 
     // --- brief title extraction ---
