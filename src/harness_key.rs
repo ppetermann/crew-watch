@@ -35,6 +35,7 @@
 //! test reads the real home or the real process environment.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -66,13 +67,26 @@ impl fmt::Debug for HarnessEnv {
 }
 
 impl HarnessEnv {
-    /// This process's `$HOME` and environment.
+    /// This process's `$HOME` and environment; see [`Self::from_os_env`].
     pub fn from_process() -> Self {
+        Self::from_os_env(std::env::var_os("HOME"), std::env::vars_os())
+    }
+
+    /// A home directory and environment as the OS gives them. An empty home
+    /// counts as unset. A variable whose name or value is not valid Unicode
+    /// is left out (as if unset), so one malformed variable can hide at most
+    /// one key source instead of aborting the caller
+    /// (`std::env::vars()` panics on such a variable).
+    fn from_os_env<I>(home: Option<OsString>, vars: I) -> Self
+    where
+        I: IntoIterator<Item = (OsString, OsString)>,
+    {
         Self {
-            home: std::env::var_os("HOME")
-                .filter(|h| !h.is_empty())
-                .map(PathBuf::from),
-            vars: std::env::vars().collect(),
+            home: home.filter(|h| !h.is_empty()).map(PathBuf::from),
+            vars: vars
+                .into_iter()
+                .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+                .collect(),
         }
     }
 
@@ -1483,6 +1497,30 @@ base_url = "https://openrouter.ai/api/v1"
             lookup_outcome("pi", &f.project(), &f.env(&[])).to_string(),
             "pi has no OpenRouter key"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_variables_are_skipped_not_fatal() {
+        use std::os::unix::ffi::OsStringExt;
+        let bad = || OsString::from_vec(vec![b'k', 0xff]);
+        let env = HarnessEnv::from_os_env(
+            Some(OsString::from("/h")),
+            [
+                (
+                    OsString::from("OPENROUTER_API_KEY"),
+                    OsString::from("sk-or"),
+                ),
+                (OsString::from("BADVALUE"), bad()),
+                (bad(), OsString::from("badname")),
+            ],
+        );
+        assert_eq!(env.vars.len(), 1);
+        assert_eq!(env.var("OPENROUTER_API_KEY"), Some("sk-or"));
+        assert_eq!(env.var("BADVALUE"), None);
+        assert_eq!(env.home, Some(PathBuf::from("/h")));
+        let empty_home = HarnessEnv::from_os_env(Some(OsString::new()), []);
+        assert_eq!(empty_home.home, None);
     }
 
     #[test]

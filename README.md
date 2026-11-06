@@ -288,7 +288,8 @@ nothing else to configure — every other setting is a flag.
 ## Quota row
 
 Above the help line, `crew-watch` shows one borderless line per selected
-provider: session / week / per-model usage bars with a percentage and a reset
+provider (two for a provider with dollar figures, such as
+[OpenRouter](#openrouter)): session / week / per-model usage bars with a percentage and a reset
 countdown.
 
 ```text
@@ -319,7 +320,8 @@ countdown.
   an `(Xm old)` suffix while keeping the last good numbers.
 - `--no-quota` disables the row and the background fetch entirely.
 
-In `--once` the same data prints bar-free, one line per provider:
+In `--once` the same data prints bar-free, one line per provider (two for a
+provider with dollar figures, such as [OpenRouter](#openrouter)):
 
 ```text
 quota claude   session 34% 2h24m  week 61% 3d7h  fable 22% 3d7h

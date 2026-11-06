@@ -448,7 +448,8 @@ fn once_lookup_line(o: &LookupOutcome) -> Option<String> {
 }
 
 /// Print the quota lines for `--once`, after the agents table. Bar-free, one
-/// line per effective provider in report order; a fetch-level failure with an
+/// line per effective provider (two when it carries dollar figures) in report
+/// order; a fetch-level failure with an
 /// explicit selection prints a single greppable `quota: unavailable (...)` line.
 /// Auto mode with no provider reporting windows (or `--no-quota`) prints nothing.
 fn print_once_quota(app: &App) {
