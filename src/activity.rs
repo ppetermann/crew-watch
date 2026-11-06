@@ -324,8 +324,11 @@ pub fn parse_busy_state(record: &str, armed_gen: Option<&str>) -> Option<bool> {
 /// `[A-Za-z0-9._-]+` tokens, `seq` and `ts` are digits, `state` is `busy`,
 /// `idle` or `unknown`. A record that breaks any rule, or whose gen is not the
 /// armed one, is `None`.
+///
+/// `armed_gen` is the gen token itself, compared verbatim (no trimming): read
+/// it from a `.busy-gen` file with [`parse_busy_gen`].
 pub fn parse_busy_record(record: &str, armed_gen: Option<&str>) -> Option<BusyRecord> {
-    let armed = armed_gen?.trim();
+    let armed = armed_gen?;
     if armed.is_empty() {
         return None;
     }
@@ -372,6 +375,19 @@ pub fn parse_busy_record(record: &str, armed_gen: Option<&str>) -> Option<BusyRe
         busy,
         ts: ts.parse().ok()?,
     })
+}
+
+/// The armed gen token in a `.busy-gen` file's contents, read as firstmate's
+/// owner (`fm_busy_current_gen` in `bin/fm-busy-lib.sh`) reads it: the first
+/// line verbatim, which must end in a newline (`read -r` fails without one)
+/// and be a `[A-Za-z0-9._-]+` token. Anything else is `None` (never armed).
+pub fn parse_busy_gen(content: &str) -> Option<&str> {
+    let (gen, _) = content.split_once('\n')?;
+    let valid = !gen.is_empty()
+        && gen
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    valid.then_some(gen)
 }
 
 /// Combine lifecycle verb and turn state into an [`Activity`] for a
@@ -426,7 +442,7 @@ pub fn load_task_state(fm_home: &Path, stem: &str) -> TaskState {
     let record = fs::read_to_string(state.join(format!("{stem}.busy-state"))).ok();
     let gen = fs::read_to_string(state.join(format!("{stem}.busy-gen"))).ok();
     let busy = match (record.as_deref(), gen.as_deref()) {
-        (Some(r), g) => parse_busy_record(r, g.map(str::trim)),
+        (Some(r), g) => parse_busy_record(r, g.and_then(parse_busy_gen)),
         _ => None,
     };
     TaskState {
@@ -765,6 +781,53 @@ mod tests {
                 ..TaskState::default()
             }
         );
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn busy_gen_is_read_as_firstmates_owner_reads_it() {
+        assert_eq!(parse_busy_gen(&format!("{GEN}\n")), Some(GEN));
+        // Only the first line counts.
+        assert_eq!(parse_busy_gen(&format!("{GEN}\nrest\n")), Some(GEN));
+        // `read -r` fails on a line without its newline; no trimming, and the
+        // token charset is strict.
+        for bad in [
+            GEN.to_string(),
+            format!(" {GEN}\n"),
+            format!("{GEN} \n"),
+            format!("{GEN}\r\n"),
+            "\n".to_string(),
+            String::new(),
+            "g1/2\n".to_string(),
+        ] {
+            assert_eq!(parse_busy_gen(&bad), None, "{bad:?}");
+        }
+        // An armed gen is compared verbatim, never trimmed.
+        assert_eq!(
+            parse_busy_state(&record("busy"), Some(&format!(" {GEN}"))),
+            None
+        );
+    }
+
+    #[test]
+    fn task_state_ignores_a_gen_file_firstmate_calls_malformed() {
+        let home = std::env::temp_dir().join(format!(
+            "crew-watch-activity-gen-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let state = home.join("state");
+        fs::create_dir_all(&state).unwrap();
+        fs::write(state.join("t.busy-state"), record("idle")).unwrap();
+        for gen in [GEN.to_string(), format!(" {GEN}\n")] {
+            fs::write(state.join("t.busy-gen"), &gen).unwrap();
+            assert_eq!(load_task_state(&home, "t").busy_ts, None, "{gen:?}");
+        }
+        fs::write(state.join("t.busy-gen"), format!("{GEN}\n")).unwrap();
+        assert_eq!(load_task_state(&home, "t").busy_ts, Some(1_786_790_704));
         let _ = fs::remove_dir_all(&home);
     }
 

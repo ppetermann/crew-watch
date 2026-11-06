@@ -6,8 +6,9 @@
 # JetBrains Mono and Noto Color Emoji web fonts, so it needs network access).
 #
 # Env: CREW_WATCH_BIN (an explicit binary, used as-is; unset, the script runs
-#      `cargo build --release` first, a no-op when up to date, and uses
-#      target/release/crew-watch, so a capture never shows a stale build),
+#      `cargo build --release` first, a no-op when up to date, and uses the
+#      binary cargo reports building, wherever CARGO_TARGET_DIR or
+#      build.target-dir put it, so a capture never shows a stale build),
 #      OUT_DIR (default docs/img), STAGGER (seconds between launch waves).
 set -euo pipefail
 
@@ -19,8 +20,16 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/crew-watch-shots.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 if [ -z "$bin" ]; then
-  (cd "$repo" && cargo build --release)
-  bin=$repo/target/release/crew-watch
+  # Ask cargo where the binary went: a target-dir override sends it outside
+  # target/, where a stale copy may still sit.
+  bin=$(cd "$repo" && cargo build --release --bin crew-watch \
+      --message-format=json-render-diagnostics |
+    python3 -Ic 'import json, sys
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("reason") == "compiler-artifact" and m["target"]["name"] == "crew-watch" and m.get("executable"):
+        print(m["executable"])')
+  [ -n "$bin" ] || { echo "capture.sh: cargo reported no crew-watch binary" >&2; exit 1; }
 fi
 # Fail now, not after the ~3-minute scene, on a bad CREW_WATCH_BIN.
 [ -f "$bin" ] && [ -x "$bin" ] || { echo "capture.sh: $bin is not an executable file" >&2; exit 1; }

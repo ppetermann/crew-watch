@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn to_proc_entry_units_and_passthrough() {
-        let raw = RawProc {
+        let raw = |zombie| RawProc {
             pid: 42,
             ppid: 7,
             name: "claude".to_string(),
@@ -191,26 +191,26 @@ mod tests {
                 "glm-5.2".to_string(),
             ],
             cwd: Some(std::path::PathBuf::from("/Users/me/proj")),
-            zombie: false,
+            zombie,
         };
-        let e = to_proc_entry(raw, 1_000.0, CLK_TZ);
+        let e = to_proc_entry(raw(false), 1_000.0, CLK_TZ);
         assert_eq!(e.stat.pid, 42);
+        assert!(!e.stat.zombie);
         assert_eq!(e.stat.ppid, 7);
         assert_eq!(e.stat.comm, "claude");
         assert_eq!(e.stat.utime, 123, "ms/10");
         assert_eq!(e.stat.stime, 0);
         assert_eq!(e.stat.rss_pages, 2_048, "bytes/4096");
-        assert_eq!(
-            e.stat.rss_kib() as u64,
-            8_388_608 / 1024,
-            "rss_kib == bytes/1024"
-        );
+        assert_eq!(e.stat.rss_kib(), 8_388_608 / 1024, "rss_kib == bytes/1024");
         assert_eq!(e.stat.starttime, 93_900);
         assert_eq!(e.cmdline, vec!["claude", "--model", "glm-5.2"]);
         assert_eq!(
             e.cwd.as_deref(),
             Some(std::path::Path::new("/Users/me/proj"))
         );
+        // The zombie flag must survive the conversion: build_sessions drops
+        // zombies, so a lost flag would let dead stand-ins reappear as rows.
+        assert!(to_proc_entry(raw(true), 1_000.0, CLK_TZ).stat.zombie);
     }
 
     #[test]

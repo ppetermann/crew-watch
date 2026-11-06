@@ -122,8 +122,13 @@ mod tests {
 
     const URL: &str = "https://github.com/ppetermann/crew-watch/pull/48";
 
+    /// A sidecar whose URL is rebuilt from its own `number`, so a rejection
+    /// can only come from the rule a test targets, never the URL check.
     fn sidecar(number: &str) -> String {
-        format!("github\n{URL}\ngithub.com\nppetermann/crew-watch\n{number}\n")
+        format!(
+            "github\nhttps://github.com/ppetermann/crew-watch/pull/{number}\n\
+             github.com\nppetermann/crew-watch\n{number}\n"
+        )
     }
 
     #[test]
@@ -189,6 +194,11 @@ mod tests {
             gh("https://evil.example/o/r/pull/48", "evil.example", "o/r"),
             None
         );
+        // Even when the URL itself is a well-formed github.com link.
+        assert_eq!(
+            gh("https://github.com/o/r/pull/48", "evil.example", "o/r"),
+            None
+        );
         assert_eq!(
             gh("https://github.com/o/r/x/pull/48", "github.com", "o/r/x"),
             None
@@ -211,9 +221,13 @@ mod tests {
     #[test]
     fn short_or_unterminated_is_none() {
         assert_eq!(parse_pr_poll(""), None);
-        assert_eq!(parse_pr_poll("github\nurl\nhost\npath\n"), None);
-        // The fifth line must end in a newline, as `read -r` requires.
-        assert_eq!(parse_pr_poll("github\nurl\nhost\npath\n48"), None);
+        let valid = sidecar("48");
+        let four_lines = &valid[..valid.rfind("48\n").unwrap()];
+        assert_eq!(parse_pr_poll(four_lines), None);
+        // The fifth line must end in a newline, as `read -r` requires, even
+        // when the sidecar is otherwise valid.
+        assert!(parse_pr_poll(&valid).is_some());
+        assert_eq!(parse_pr_poll(valid.strip_suffix('\n').unwrap()), None);
     }
 
     #[test]
