@@ -338,7 +338,7 @@ key decides what the line shows:
 | Neither | No OpenRouter line; nothing is sent to OpenRouter |
 
 ```text
- openrouter limit ███░░░░░░░░░  26% 24d  left $74.50
+ openrouter limit ███░░░░░░░░░  26% 24d0h  left $74.50
             1d $3.20  gpt-4.1 $2.10 · gemini-3-flash-preview $0.80 · claude-sonnet-4 $0.21 · gpt-4o $0.07 · rest $0.02
 ```
 
@@ -348,7 +348,7 @@ the total and the most expensive models stay longest. `--once` prints both
 lines, and when the harness has no usable key, one line saying why:
 
 ```text
-quota openrouter  limit 26% 24d  left $74.50
+quota openrouter  limit 26% 24d0h  left $74.50
 quota openrouter  1d $3.20  gpt-4.1 $2.10, gemini-3-flash-preview $0.80, claude-sonnet-4 $0.21, gpt-4o $0.07, rest $0.02
 quota openrouter: pi has no OpenRouter key
 ```
@@ -366,7 +366,7 @@ harness's own order:
 | Harness | Where the key is read |
 |---------|----------------------|
 | Claude Code | `ANTHROPIC_AUTH_TOKEN` (then `ANTHROPIC_API_KEY`), only when `ANTHROPIC_BASE_URL` is OpenRouter's. Each from the `env` block of the project's `.claude/settings.local.json`, `.claude/settings.json`, then `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR`), else the environment |
-| OpenCode | `provider.openrouter.options.apiKey` in `opencode.json`/`opencode.jsonc` (the project's, `$OPENCODE_CONFIG`, then `~/.config/opencode/`); then the `openrouter` entry of `~/.local/share/opencode/auth.json` (or `$OPENCODE_AUTH_CONTENT`); then `OPENROUTER_API_KEY` |
+| OpenCode | `provider.openrouter.options.apiKey` in `$OPENCODE_CONFIG_CONTENT`, then in `opencode.json`/`opencode.jsonc` (the project's, `$OPENCODE_CONFIG`, then `~/.config/opencode/`); then the `openrouter` entry of `~/.local/share/opencode/auth.json` (or `$OPENCODE_AUTH_CONTENT`); then `OPENROUTER_API_KEY` |
 | pi | The `openrouter` entry of `~/.pi/agent/auth.json` (an API key, or the key from "Sign in with OpenRouter"); then `providers.openrouter.apiKey` in `models.json` beside it; then `OPENROUTER_API_KEY`. `$PI_CODING_AGENT_DIR` moves the directory |
 | Codex | In `~/.codex/config.toml` (`$CODEX_HOME`), the provider `model_provider` names, when its `base_url` is OpenRouter's: `experimental_bearer_token`, else the variable `env_key` names |
 | Grok Build | In `~/.grok/config.toml` (`$GROK_HOME`), the `[model."<name>"]` that `[models] default` names, when its `base_url` is OpenRouter's: the variable `env_key` names |
@@ -384,7 +384,8 @@ harness's files are found either way.
 
 Requests go over HTTPS to `openrouter.ai` only, with redirects and proxies off,
 on the quota thread at the quota cadence: one request per fetch with a
-harness's key, four with a management key. Keys are never printed, logged or
+harness's key, four with a management key (one more per hundred keys the
+account has). Keys are never printed, logged or
 passed to another program.
 
 ## Use as a library
