@@ -225,7 +225,9 @@ fn marker(line: &str, name: &str) -> Option<String> {
 /// ` (hold-until: ...)`, ` (since ...)`, ` (merged ...)`, ` (reported ...)`,
 /// ` (done ...)` — and ` blocked-by: ...`. The title itself may contain
 /// parenthesized text, so we only cut at the first marker keyword, not at
-/// every `(`.
+/// every `(`. As in the owner's pattern, a word marker (`since`, `merged`,
+/// `reported`, `done`) needs whitespace after the keyword, so a title
+/// parenthetical such as `(sincere apology)` is kept.
 fn strip_trailing_markers(title: &str) -> String {
     const MARKERS: &[&str] = &[
         " (repo:",
@@ -234,18 +236,24 @@ fn strip_trailing_markers(title: &str) -> String {
         " (hold:",
         " (hold-kind:",
         " (hold-until:",
-        " (since",
-        " (merged",
-        " (reported",
-        " (done",
         " blocked-by:",
     ];
+    const WORD_MARKERS: &[&str] = &[" (since", " (merged", " (reported", " (done"];
     let mut cut = title.len();
     for &m in MARKERS {
         if let Some(idx) = title.find(m) {
-            if idx < cut {
-                cut = idx;
-            }
+            cut = cut.min(idx);
+        }
+    }
+    for &m in WORD_MARKERS {
+        let word = title.match_indices(m).find(|&(idx, _)| {
+            title[idx + m.len()..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+        });
+        if let Some((idx, _)) = word {
+            cut = cut.min(idx);
         }
     }
     title[..cut].trim_end().to_string()
@@ -538,6 +546,12 @@ mod tests {
             let line = format!("- [ ] t - A call {marker} (repo: x)");
             let pairs = parse_backlog(&line);
             assert_eq!(pairs[0].1, "A call", "{marker}");
+        }
+        // A word marker needs whitespace after its keyword, as in the owner's
+        // pattern; a parenthetical that only starts with it is title text.
+        for kept in ["(sincere apology)", "(mergedUpstream)", "(done)"] {
+            let line = format!("- [ ] t - A call {kept} (since 2026-11-01)");
+            assert_eq!(parse_backlog(&line)[0].1, format!("A call {kept}"));
         }
     }
 
