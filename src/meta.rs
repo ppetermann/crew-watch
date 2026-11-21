@@ -38,6 +38,9 @@ pub struct TaskRecord {
     /// The incarnation token firstmate stamps at launch,
     /// `s<epoch>.<pid>.<n>`; see [`TaskRecord::spawned_at`].
     pub spawn_gen: Option<String>,
+    /// The task's merge posture, `yolo=on|off`, which firstmate's
+    /// `fm-spawn.sh` records; `None` when absent. See [`TaskRecord::yolo_on`].
+    pub yolo: Option<String>,
 }
 
 impl TaskRecord {
@@ -51,6 +54,13 @@ impl TaskRecord {
             return None;
         }
         epoch.parse().ok()
+    }
+
+    /// Whether the record says `yolo=on`, the posture under which firstmate
+    /// lands a finished task itself. Exactly `on`; anything else (absent,
+    /// `off`, other values) is `false`.
+    pub fn yolo_on(&self) -> bool {
+        self.yolo.as_deref() == Some("on")
     }
 }
 
@@ -75,6 +85,7 @@ pub fn parse_meta(content: &str) -> TaskRecord {
             "branch" => r.branch = Some(val),
             "pr" => r.pr = Some(val).filter(|v| !v.is_empty()),
             "spawn_gen" => r.spawn_gen = Some(val),
+            "yolo" => r.yolo = Some(val),
             _ => {}
         }
     }
@@ -192,6 +203,24 @@ busy_gen=g1786446653.28322.9129\n";
             assert_eq!(at(bad), None, "{bad:?}");
         }
         assert_eq!(TaskRecord::default().spawned_at(), None);
+    }
+
+    #[test]
+    fn parse_reads_yolo_last_line_wins() {
+        let on = parse_meta("yolo=on\n");
+        assert_eq!(on.yolo.as_deref(), Some("on"));
+        assert!(on.yolo_on());
+        let off = parse_meta("yolo=off\n");
+        assert_eq!(off.yolo.as_deref(), Some("off"));
+        assert!(!off.yolo_on());
+        let absent = parse_meta(SAMPLE);
+        assert_eq!(absent.yolo, None);
+        assert!(!absent.yolo_on());
+        // firstmate reads `grep '^yolo=' | tail -1`: the last line wins.
+        let flipped = parse_meta("yolo=on\nkind=ship\nyolo=off\n");
+        assert_eq!(flipped.yolo.as_deref(), Some("off"));
+        assert!(!flipped.yolo_on());
+        assert!(parse_meta("yolo=off\nyolo=on\n").yolo_on());
     }
 
     #[test]
