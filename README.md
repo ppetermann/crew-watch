@@ -233,6 +233,10 @@ The `TASK` column is resolved from layered sources; the first that answers wins.
    prefixed with the project name — `crew-watch: right-align the numeric
    columns`. Under width pressure the title shortens and the project prefix
    survives.
+   A task whose record says `yolo=on` — firstmate's per-task merge posture
+   (`bin/fm-spawn.sh` records `yolo=on|off`), under which firstmate lands the
+   finished task itself without asking — carries a `[yolo]` marker in that
+   protected prefix: `crew-watch [yolo]: right-align the numeric columns`.
 2. **Otherwise, the project it is working in.** The project name is the git
    repository name when the working directory is inside one (worktrees and
    bare-repo worktrees included), else the directory's basename. A session with
@@ -262,7 +266,7 @@ Inside that directory it reads, per task:
 
 | Path | Used for |
 |------|----------|
-| `state/<task>.meta` | matches an agent process to a task by working directory; supplies the project name |
+| `state/<task>.meta` | matches an agent process to a task by working directory; supplies the project name and the `yolo=` merge posture (`[yolo]` in `TASK`) |
 | `state/<task>.status` | the task's lifecycle verb (`working`, `blocked`, `done`, …) → `STATE` |
 | `state/<task>.busy-state` + `state/<task>.busy-gen` | splits `working` into busy vs. waiting-between-turns |
 | `data/backlog.md` | the human task title for `TASK` |

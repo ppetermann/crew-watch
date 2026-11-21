@@ -362,7 +362,7 @@ fn once_agent_row(
 fn print_once(app: &App, lookup: Option<&LookupOutcome>) {
     use crate::format_util::{format_kib, format_uptime};
     use crate::procfs::CpuLine;
-    use crate::taskinfo::{compose_task_line, fit_task_line};
+    use crate::taskinfo::{compose_task_line, fit_task_line, task_prefix};
     use std::io::IsTerminal;
 
     let Some(snap) = app.snapshot() else {
@@ -415,9 +415,10 @@ fn print_once(app: &App, lookup: Option<&LookupOutcome>) {
             } else {
                 s.model.clone()
             };
+            let prefix = task_prefix(s.task_project.as_deref(), s.yolo);
             let task = match task_width {
-                Some(w) => fit_task_line(s.task_project.as_deref(), &s.task, w),
-                None => compose_task_line(s.task_project.as_deref(), &s.task),
+                Some(w) => fit_task_line(prefix.as_deref(), &s.task, w),
+                None => compose_task_line(prefix.as_deref(), &s.task),
             };
             println!(
                 "{}",

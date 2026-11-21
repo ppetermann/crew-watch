@@ -222,6 +222,10 @@ pub struct Session {
     /// sessions, rendered as the task line's protected `project: ` prefix
     /// (filled by the caller; `None` otherwise).
     pub task_project: Option<String>,
+    /// The fleet record says `yolo=on`: firstmate lands the finished task
+    /// without asking (filled by the caller; `false` otherwise). Rendered as
+    /// the task line's [`crate::taskinfo::YOLO_MARKER`].
+    pub yolo: bool,
     /// Compact display model parsed from argv (e.g. `glm-5.2`), or empty when
     /// no model flag was present (filled by the caller; rendered as `-`).
     pub model: String,
@@ -358,6 +362,7 @@ pub fn build_sessions(curr: &Snapshot, prev: Option<&Snapshot>) -> Vec<Session> 
             elapsed_secs,
             task: String::new(),
             task_project: None,
+            yolo: false,
             model: String::new(),
             activity: crate::activity::Activity::default(),
         });
