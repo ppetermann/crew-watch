@@ -85,10 +85,18 @@ pub fn parse_meta(content: &str) -> TaskRecord {
             "branch" => r.branch = Some(val),
             "pr" => r.pr = Some(val).filter(|v| !v.is_empty()),
             "spawn_gen" => r.spawn_gen = Some(val),
-            "yolo" => r.yolo = Some(val),
             _ => {}
         }
     }
+    // Read exactly as firstmate's merge-authority check does
+    // (`grep '^yolo=' | tail -1 | cut -d= -f2-`, then `= on`): the key must
+    // start the line, nothing is trimmed, and the last such line wins. Never
+    // more lenient than the owner.
+    r.yolo = content
+        .split('\n')
+        .filter_map(|l| l.strip_prefix("yolo="))
+        .next_back()
+        .map(str::to_string);
     r
 }
 
@@ -221,6 +229,17 @@ busy_gen=g1786446653.28322.9129\n";
         assert_eq!(flipped.yolo.as_deref(), Some("off"));
         assert!(!flipped.yolo_on());
         assert!(parse_meta("yolo=off\nyolo=on\n").yolo_on());
+        assert!(parse_meta("yolo=on").yolo_on());
+        // Not on for firstmate, so not on here: no trimming of key or value.
+        for raw in [
+            " yolo=on\n",
+            "yolo= on\n",
+            "yolo=on \n",
+            "yolo=on\r\n",
+            "yolo=ON\n",
+        ] {
+            assert!(!parse_meta(raw).yolo_on(), "{raw:?}");
+        }
     }
 
     #[test]
