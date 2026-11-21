@@ -606,7 +606,7 @@ fn render_aligned_row(
     // column, so alignment is unaffected.
     let first_used = column_used.iter().position(|used| *used).unwrap_or(0);
 
-    for c in 0..=block_max_col {
+    for (c, col_w) in layout.cols.iter().enumerate().take(block_max_col + 1) {
         let sep = if c == first_used { "" } else { "  " };
         let win = provider_cols
             .iter()
@@ -617,7 +617,7 @@ fn render_aligned_row(
         if let Some(w) = win {
             let full = window_label(&w.id, &w.label);
             let label_text = tier_label(full, tier.labels);
-            let label_w = layout.cols[c].label_w;
+            let label_w = col_w.label_w;
             // label segment: "{sep}{label:<label_w} " — padding the label (not
             // the whole slot) is what makes the bar line up across rows whose
             // labels differ in width.
@@ -639,7 +639,7 @@ fn render_aligned_row(
             ));
             if tier.reset {
                 let reset_str = reset_secs(w.resets_at.as_deref(), now_epoch).map(format_reset);
-                let max_reset_len = layout.cols[c].reset_w;
+                let max_reset_len = col_w.reset_w;
                 // Pad the reset field only when this row still renders a later
                 // column, so that column lines up; when nothing follows on this
                 // row the reset is verbatim (nothing to align against, and this
@@ -669,8 +669,8 @@ fn render_aligned_row(
             // starts at the shared x. (If no other row uses this column there is
             // nothing to align against, so a lone or short provider is not padded
             // for a column no other row needs.)
-            let label_w = layout.cols[c].label_w;
-            let max_reset_len = layout.cols[c].reset_w;
+            let label_w = col_w.label_w;
+            let max_reset_len = col_w.reset_w;
             let reset_field = if tier.reset && c < block_max_col && max_reset_len > 0 {
                 1 + max_reset_len
             } else {
