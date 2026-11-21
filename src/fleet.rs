@@ -119,6 +119,9 @@ pub struct AgentRow {
     pub branch: Option<String>,
     pub registered_pr: Option<String>,
     pub spawned_at: Option<u64>,
+    /// The record's merge posture is `yolo=on` (firstmate lands the finished
+    /// task without asking); see [`TaskRecord::yolo_on`].
+    pub yolo: bool,
     /// The task's whole `.status` log, oldest first.
     pub status_log: Vec<StatusLine>,
     /// The task's last green local gate.
@@ -339,6 +342,7 @@ fn resolve_sessions(
                 None => state.activity = Activity::Unknown,
             }
             s.activity = state.activity;
+            s.yolo = record.is_some_and(TaskRecord::yolo_on);
         }
         rows.push(AgentRow {
             pid: s.pid,
@@ -364,6 +368,7 @@ fn resolve_sessions(
             branch: record.and_then(|r| r.branch.clone()),
             registered_pr: record.and_then(|r| r.pr.clone()),
             spawned_at: record.and_then(TaskRecord::spawned_at),
+            yolo: s.yolo,
             status_log: state.status_log,
             gate_pass,
             estimate_min: record
@@ -605,11 +610,33 @@ mod tests {
         assert_eq!(json["pr"]["url"], "https://github.com/o/r/pull/7");
         // A meta without the task-shape keys leaves them empty.
         assert_eq!((row.task_kind.as_ref(), row.spawned_at), (None, None));
+        assert!(!row.yolo && !s.yolo);
         assert_eq!(row.status_log.len(), 2);
         assert_eq!(row.status_log[1].text, "awaiting review");
         assert_eq!(row.gate_pass, None);
         assert_eq!(row.estimate_min, None);
         assert_eq!(row.report_at, None);
+    }
+
+    #[test]
+    fn fleet_row_and_session_carry_the_yolo_posture() {
+        for (meta_line, want) in [("yolo=on\n", true), ("yolo=off\n", false), ("", false)] {
+            let home = tempfile_dir("fleet-yolo");
+            let state = home.join("state");
+            fs::create_dir_all(&state).unwrap();
+            fs::write(
+                state.join("y.meta"),
+                format!("endpoint_task_id=y\nworktree={WORKTREE}\n{meta_line}"),
+            )
+            .unwrap();
+            let snap = agent_snapshot(WORKTREE, &["claude"]);
+            let (sessions, rows) = resolve(&home, &snap);
+            assert_eq!(
+                (rows[0].yolo, sessions[0].yolo),
+                (want, want),
+                "{meta_line:?}"
+            );
+        }
     }
 
     #[test]

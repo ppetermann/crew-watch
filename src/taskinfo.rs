@@ -177,6 +177,25 @@ pub fn compose_task_line(project: Option<&str>, line: &str) -> String {
     }
 }
 
+/// Marker the TASK column appends to the protected project prefix of a task
+/// whose fleet record says `yolo=on` — firstmate's per-task merge posture
+/// under which it lands the finished task without asking. ASCII, so it never
+/// disturbs the grid's width arithmetic.
+pub const YOLO_MARKER: &str = "[yolo]";
+
+/// The protected prefix for a task line: the project, with [`YOLO_MARKER`]
+/// appended when `yolo` is set (the marker alone when there is no project).
+/// Feed the result to [`compose_task_line`] / [`fit_task_line`] so the marker
+/// survives width pressure exactly as the project does.
+pub fn task_prefix(project: Option<&str>, yolo: bool) -> Option<String> {
+    let project = project.filter(|p| !p.is_empty());
+    match (project, yolo) {
+        (Some(p), true) => Some(format!("{p} {YOLO_MARKER}")),
+        (None, true) => Some(YOLO_MARKER.to_string()),
+        (p, false) => p.map(str::to_string),
+    }
+}
+
 /// Fit a task line into `width` display columns, with the project prefix
 /// protected: when space is tight the task text is what shortens (bracketed
 /// id dropped first, then ellipsis), and only when the width cannot even hold
@@ -298,6 +317,30 @@ fn positional_argv_excerpt(cmdline: &[String]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn yolo_marker_rides_the_protected_prefix() {
+        assert_eq!(super::task_prefix(Some("cw"), false).as_deref(), Some("cw"));
+        assert_eq!(
+            super::task_prefix(Some("cw"), true).as_deref(),
+            Some("cw [yolo]")
+        );
+        assert_eq!(super::task_prefix(None, true).as_deref(), Some("[yolo]"));
+        assert_eq!(
+            super::task_prefix(Some(""), true).as_deref(),
+            Some("[yolo]")
+        );
+        assert_eq!(super::task_prefix(None, false), None);
+        let p = super::task_prefix(Some("cw"), true);
+        assert_eq!(
+            super::compose_task_line(p.as_deref(), "fix it"),
+            "cw [yolo]: fix it"
+        );
+        // Under width pressure the title shortens; the marker survives.
+        let fitted = super::fit_task_line(p.as_deref(), "a long task title here", 16);
+        assert!(fitted.starts_with("cw [yolo]: "), "{fitted}");
+        assert_eq!(fitted.chars().count(), 16);
+    }
+
     use super::*;
     use crate::detect::AGENT_KINDS;
     use crate::meta::parse_meta;
