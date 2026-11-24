@@ -433,6 +433,8 @@ per line), its last green local gate, the planner's estimate from the backlog
 and when a scout's report was written. `crew_watch::ledger::LedgerTail` reads
 firstmate's fleet activity ledger incrementally, for tasks that have already
 been cleaned up.
+A row also says whether firstmate lands the task on its own (the `yolo=on`
+posture, shown as `[yolo]` in `TASK`).
 
 ## Requirements
 
